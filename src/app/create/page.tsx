@@ -1,12 +1,33 @@
-import { EmptyState } from "@/components/empty-state";
-import { Wand2 } from "lucide-react";
+import { prisma } from "@/lib/db";
+import { CreateForm } from "./create-form";
 
-export default function CreatePage() {
+export const dynamic = "force-dynamic";
+
+export default async function CreatePage() {
+  const accounts = await prisma.account.findMany({
+    orderBy: { handle: "asc" },
+    include: { template: { select: { id: true } } },
+  });
+
   return (
-    <EmptyState
-      icon={Wand2}
-      title="Belum tersedia"
-      description="Halaman pembuat konten akan dibangun di Fase 4 setelah render engine dan queue selesai."
-    />
+    <div className="flex flex-col gap-6">
+      <div>
+        <h1 className="text-display text-text">Buat konten</h1>
+        <p className="mt-1 text-body text-text-muted">
+          Satu video, satu caption, satu teks thumbnail — hasilnya {accounts.filter((a) => a.template && a.isActive).length} video
+          untuk semua akun terpilih.
+        </p>
+      </div>
+      <CreateForm
+        accounts={accounts.map((a) => ({
+          id: a.id,
+          handle: a.handle,
+          platform: a.platform,
+          displayName: a.displayName,
+          isActive: a.isActive,
+          hasTemplate: Boolean(a.template),
+        }))}
+      />
+    </div>
   );
 }

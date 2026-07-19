@@ -8,6 +8,8 @@ const patchSchema = z.object({
   platform: z.enum(PLATFORMS).optional(),
   displayName: z.string().trim().min(1).max(120).optional(),
   isActive: z.boolean().optional(),
+  // null = hapus override (kembali ke platform default); string kosong = same as null
+  promptStyle: z.string().max(5000).nullable().optional(),
 });
 
 export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> }) {
@@ -27,8 +29,13 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
+  // Normalisasi promptStyle: string kosong → null (biar query filter konsisten)
+  const data = { ...parsed.data };
+  if (typeof data.promptStyle === "string" && data.promptStyle.trim() === "") {
+    data.promptStyle = null;
+  }
   try {
-    const updated = await prisma.account.update({ where: { id }, data: parsed.data });
+    const updated = await prisma.account.update({ where: { id }, data });
     return NextResponse.json(updated);
   } catch (err) {
     if (err instanceof Error && err.message.includes("Unique constraint")) {

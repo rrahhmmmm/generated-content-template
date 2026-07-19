@@ -20,9 +20,24 @@ model Account {
   platform    String
   displayName String
   isActive    Boolean     @default(true)
+  // Instruksi tambahan khusus akun ini untuk LLM (gaya bahasa, target audiens,
+  // referensi brand, dll). Kosongkan untuk pakai global + platform saja.
+  promptStyle String?
   template    Template?
   renditions  Rendition[]
   createdAt   DateTime    @default(now())
+}
+
+// Konfigurasi prompt LLM. Singleton — hanya satu row dengan id="global".
+// Layer prompt: systemPrompt (global rules) + platform style (TIKTOK/IG/YT)
+// + Account.promptStyle (per-akun override).
+model PromptConfig {
+  id              String   @id @default("global")
+  systemPrompt    String
+  tiktokStyle     String   @default("")
+  instagramStyle  String   @default("")
+  youtubeStyle    String   @default("")
+  updatedAt       DateTime @updatedAt
 }
 
 model Template {

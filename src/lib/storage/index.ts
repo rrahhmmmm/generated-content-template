@@ -24,8 +24,18 @@ export function storage(): StorageAdapter {
       publicPrefix: "/api/uploads/local",
     });
   } else if (driver === "r2") {
-    // Fase 3
-    throw new Error("R2 storage adapter belum diimplementasikan. Lihat plan.md Fase 3.");
+    const need = ["R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET", "R2_PUBLIC_URL"] as const;
+    for (const k of need) if (!process.env[k]) throw new Error(`${k} wajib di-set untuk STORAGE_DRIVER=r2`);
+    // Lazy import — hindari memuat @aws-sdk saat driver lokal.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { R2StorageAdapter } = require("./r2") as typeof import("./r2");
+    cached = new R2StorageAdapter({
+      accountId: process.env.R2_ACCOUNT_ID!,
+      accessKeyId: process.env.R2_ACCESS_KEY_ID!,
+      secretAccessKey: process.env.R2_SECRET_ACCESS_KEY!,
+      bucket: process.env.R2_BUCKET!,
+      publicUrl: process.env.R2_PUBLIC_URL!,
+    });
   } else {
     throw new Error(`Unknown STORAGE_DRIVER: ${driver}`);
   }

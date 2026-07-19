@@ -71,10 +71,12 @@ export function TemplateEditor({
         body: JSON.stringify({ frameKey, introKey, layout }),
       });
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        setSaveError(
-          typeof body.error === "string" ? body.error : "Gagal menyimpan template. Cek input."
-        );
+        const body = await res.json().catch(() => ({} as { error?: string }));
+        const msg =
+          typeof body.error === "string" && body.error.length > 0
+            ? body.error
+            : `Gagal menyimpan template (${res.status})`;
+        setSaveError(msg);
         return;
       }
       setSaveMessage("Template tersimpan.");

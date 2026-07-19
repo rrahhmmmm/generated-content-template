@@ -2,31 +2,35 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 
+// Koordinat pixel boleh float — FFmpeg dan canvas render tetap benar (dibulatkan
+// saat drawtext dibangun). Batasi hanya finite + non-negative.
 const boxSchema = z.object({
-  x: z.number().int().min(0),
-  y: z.number().int().min(0),
-  w: z.number().int().positive(),
-  h: z.number().int().positive(),
+  x: z.number().finite().min(0),
+  y: z.number().finite().min(0),
+  w: z.number().finite().positive(),
+  h: z.number().finite().positive(),
 });
 
 const paddingSchema = z.object({
-  top: z.number().int().min(0),
-  right: z.number().int().min(0),
-  bottom: z.number().int().min(0),
-  left: z.number().int().min(0),
+  top: z.number().finite().min(0),
+  right: z.number().finite().min(0),
+  bottom: z.number().finite().min(0),
+  left: z.number().finite().min(0),
 });
 
 const textSchema = z.object({
   box: boxSchema,
   padding: paddingSchema,
   fontFile: z.string().min(1),
-  fontSize: z.number().int().min(8).max(400),
-  minFontSize: z.number().int().min(8).max(400),
+  fontSize: z.number().finite().min(8).max(400),
+  minFontSize: z.number().finite().min(8).max(400),
   lineHeight: z.number().min(0.8).max(3),
-  color: z.string().regex(/^#[0-9a-f]{6}$/i),
+  // Terima "#RGB" atau "#RRGGBB" (input color picker Safari kadang keluarkan
+  // 3-char). Normalisasi di process rendering kalau perlu.
+  color: z.string().regex(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i),
   align: z.enum(["left", "center", "right"]),
   uppercase: z.boolean(),
-  maxLines: z.number().int().min(1).max(20),
+  maxLines: z.number().finite().min(1).max(20),
   shadow: z
     .object({
       color: z.string(),
@@ -71,7 +75,14 @@ export async function PUT(req: Request, ctx: { params: Promise<{ id: string }> }
   const body = await req.json().catch(() => null);
   const parsed = bodySchema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+    // Build human-readable message: "layout.intro.text.fontSize: harus integer".
+    const messages = parsed.error.issues.map((issue) => {
+      const path = issue.path.join(".") || "(root)";
+      return `${path}: ${issue.message}`;
+    });
+    const errorText = messages.join("; ");
+    console.error("[PUT template] 400 untuk", id, "—", errorText);
+    return NextResponse.json({ error: errorText, issues: parsed.error.flatten() }, { status: 400 });
   }
   const account = await prisma.account.findUnique({ where: { id }, select: { id: true } });
   if (!account) return NextResponse.json({ error: "Account not found" }, { status: 404 });
