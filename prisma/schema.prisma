@@ -1,0 +1,72 @@
+// Data model — see plan.md §3
+// Menggunakan SQLite untuk local dev (zero-config).
+// Untuk produksi: ganti provider ke "postgresql" dan set DATABASE_URL ke Postgres URL,
+// lalu re-migrate. Skema di bawah kompatibel dengan Postgres — hanya perlu tambah
+// kembali @db.Text pada kolom string besar (baseCaption, caption, errorMessage) dan
+// ubah `layout String` menjadi `layout Json`.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Account {
+  id          String      @id @default(cuid())
+  handle      String      @unique
+  platform    String
+  displayName String
+  isActive    Boolean     @default(true)
+  template    Template?
+  renditions  Rendition[]
+  createdAt   DateTime    @default(now())
+}
+
+model Template {
+  id        String   @id @default(cuid())
+  accountId String   @unique
+  account   Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  frameKey  String
+  introKey  String?
+  width     Int      @default(1080)
+  height    Int      @default(1920)
+  layout    String
+  version   Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Job {
+  id             String      @id @default(cuid())
+  sourceKey      String
+  sourceDuration Float?
+  baseCaption    String
+  baseThumbText  String
+  status         String      @default("QUEUED")
+  renditions     Rendition[]
+  createdAt      DateTime    @default(now())
+  completedAt    DateTime?
+}
+
+model Rendition {
+  id           String    @id @default(cuid())
+  jobId        String
+  job          Job       @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  accountId    String
+  account      Account   @relation(fields: [accountId], references: [id])
+  status       String    @default("PENDING")
+  caption      String?
+  thumbText    String?
+  outputKey    String?
+  thumbnailKey String?
+  errorMessage String?
+  attempts     Int       @default(0)
+  startedAt    DateTime?
+  finishedAt   DateTime?
+
+  @@unique([jobId, accountId])
+  @@index([jobId, status])
+}

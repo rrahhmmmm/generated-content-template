@@ -1,0 +1,128 @@
+@import "tailwindcss";
+
+/* Design tokens — plan.md §7. Ganti nilai di sini untuk mengubah tema global.
+   Semua komponen wajib memakai token, jangan hardcode hex. */
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --bg:            #FBFBFA;
+  --surface:       #FFFFFF;
+  --surface-sunk:  #F4F4F2;
+  --border:        #E4E4E1;
+  --border-strong: #C9C9C4;
+
+  --text:          #1C1C1A;
+  --text-muted:    #6B6B66;
+  --text-subtle:   #93938D;
+
+  --accent:        #2F5FE0;
+  --accent-hover:  #2650C4;
+  --accent-bg:     #EDF2FE;
+  --accent-fg:     #FFFFFF;
+
+  --success:       #1D7A55;
+  --success-bg:    #E6F4EE;
+  --warning:       #A66B00;
+  --warning-bg:    #FDF3E0;
+  --danger:        #C0392B;
+  --danger-bg:     #FBEDEB;
+
+  --radius-sm: 6px;
+  --radius:    10px;
+  --radius-lg: 14px;
+}
+
+.dark {
+  --bg:            #16161A;
+  --surface:       #1E1E22;
+  --surface-sunk:  #131316;
+  --border:        #2B2B31;
+  --border-strong: #3E3E45;
+
+  --text:          #ECECEA;
+  --text-muted:    #A5A5A0;
+  --text-subtle:   #6E6E68;
+
+  --accent:        #6D8FEB;
+  --accent-hover:  #85A2F0;
+  --accent-bg:     #1E2540;
+  --accent-fg:     #0F1220;
+
+  --success:       #3DAF80;
+  --success-bg:    #14291F;
+  --warning:       #D9A24A;
+  --warning-bg:    #2A2015;
+  --danger:        #E06B5F;
+  --danger-bg:     #2A1614;
+}
+
+@theme inline {
+  --color-bg:            var(--bg);
+  --color-surface:       var(--surface);
+  --color-surface-sunk:  var(--surface-sunk);
+  --color-border:        var(--border);
+  --color-border-strong: var(--border-strong);
+
+  --color-text:          var(--text);
+  --color-text-muted:    var(--text-muted);
+  --color-text-subtle:   var(--text-subtle);
+
+  --color-accent:        var(--accent);
+  --color-accent-hover:  var(--accent-hover);
+  --color-accent-bg:     var(--accent-bg);
+  --color-accent-fg:     var(--accent-fg);
+
+  --color-success:       var(--success);
+  --color-success-bg:    var(--success-bg);
+  --color-warning:       var(--warning);
+  --color-warning-bg:    var(--warning-bg);
+  --color-danger:        var(--danger);
+  --color-danger-bg:     var(--danger-bg);
+
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius);
+  --radius-lg: var(--radius-lg);
+
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+
+  /* Type scale — plan.md §7 */
+  --text-display: 28px;
+  --text-display--line-height: 34px;
+  --text-display--font-weight: 500;
+
+  --text-title: 20px;
+  --text-title--line-height: 28px;
+  --text-title--font-weight: 500;
+
+  --text-body: 15px;
+  --text-body--line-height: 24px;
+  --text-body--font-weight: 400;
+
+  --text-label: 13px;
+  --text-label--line-height: 18px;
+  --text-label--font-weight: 500;
+
+  --text-caption: 12px;
+  --text-caption--line-height: 16px;
+  --text-caption--font-weight: 400;
+}
+
+* {
+  border-color: var(--border);
+}
+
+html, body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Focus ring konsisten untuk semua komponen fokusable */
+:where(button, [role="button"], a, input, textarea, select, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
