@@ -3,15 +3,29 @@
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import type { TemplateLayout, IntroCard } from "@/types/template-layout";
+import {
+  FONT_CATEGORY_LABEL,
+  groupFontsByCategory,
+  type FontCategory,
+} from "@/lib/font-catalog";
 
 type Props = {
   layout: TemplateLayout;
   onChange: (next: TemplateLayout) => void;
 };
 
-const FONT_FILES = ["Inter-Black.ttf"];
+const FONT_GROUPS = groupFontsByCategory();
+const FONT_CATEGORY_ORDER: FontCategory[] = ["display", "serif", "sans"];
 
 export function LayoutForm({ layout, onChange }: Props) {
   const intro = layout.intro;
@@ -105,11 +119,20 @@ export function LayoutForm({ layout, onChange }: Props) {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {FONT_FILES.map((f) => (
-                  <SelectItem key={f} value={f}>
-                    {f}
-                  </SelectItem>
-                ))}
+                {FONT_CATEGORY_ORDER.map((cat) => {
+                  const items = FONT_GROUPS[cat];
+                  if (items.length === 0) return null;
+                  return (
+                    <SelectGroup key={cat}>
+                      <SelectLabel>{FONT_CATEGORY_LABEL[cat]}</SelectLabel>
+                      {items.map((f) => (
+                        <SelectItem key={f.filename} value={f.filename}>
+                          {f.label}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  );
+                })}
               </SelectContent>
             </Select>
           </div>

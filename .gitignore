@@ -37,6 +37,10 @@ yarn-error.log*
 # local storage (dev)
 /storage/
 
+# proprietary fonts (Microsoft/Apple) — di-copy dari system saat local dev,
+# jangan pernah dicommit karena lisensi.
+/public/fonts/ArialBlack.ttf
+
 # prisma dev db
 prisma/*.db
 prisma/*.db-journal

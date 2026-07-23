@@ -15,7 +15,8 @@
     "test:watch": "vitest",
     "render": "tsx scripts/render.ts",
     "worker": "tsx scripts/worker.ts",
-    "submit-job": "tsx scripts/submit-job.ts"
+    "submit-job": "tsx scripts/submit-job.ts",
+    "fonts:fetch": "tsx scripts/fetch-fonts.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.16",
