@@ -67,21 +67,38 @@ model Job {
 }
 
 model Rendition {
-  id           String    @id @default(cuid())
-  jobId        String
-  job          Job       @relation(fields: [jobId], references: [id], onDelete: Cascade)
-  accountId    String
-  account      Account   @relation(fields: [accountId], references: [id])
-  status       String    @default("PENDING")
-  caption      String?
-  thumbText    String?
-  outputKey    String?
-  thumbnailKey String?
-  errorMessage String?
-  attempts     Int       @default(0)
-  startedAt    DateTime?
-  finishedAt   DateTime?
+  id                    String    @id @default(cuid())
+  jobId                 String
+  job                   Job       @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  accountId             String
+  account               Account   @relation(fields: [accountId], references: [id])
+  status                String    @default("PENDING")
+  caption               String?
+  thumbText             String?
+  outputKey             String?
+  thumbnailKey          String?
+  thumbnailSource       String?   // "AUTO" | "MANUAL" — null = fallback (extract detik 2 dari output)
+  thumbnailTimestampSec Float?    // hanya diisi kalau source = AUTO
+  errorMessage          String?
+  attempts              Int       @default(0)
+  startedAt             DateTime?
+  finishedAt            DateTime?
 
   @@unique([jobId, accountId])
   @@index([jobId, status])
+}
+
+// Pre-job async task untuk generate N thumbnail unik dari 1 video source.
+// State disimpan di sini supaya UI bisa poll progress; worker (queue existing)
+// yang eksekusi. Field JSON di-string karena SQLite; parse di consumer.
+model ThumbnailTask {
+  id        String   @id @default(cuid())
+  sourceKey String
+  status    String   @default("QUEUED") // QUEUED | RUNNING | DONE | FAILED
+  progress  String   @default("{}")     // JSON: { done: number, total: number }
+  items     String   @default("[]")     // JSON: GeneratedThumb[]
+  warnings  String   @default("[]")     // JSON: string[]
+  error     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }

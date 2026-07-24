@@ -17,6 +17,7 @@ Satu klip video masuk → sepuluh video keluar, masing-masing sudah menempel ove
 | Queue | **BullMQ** + **ioredis** (prod) / in-memory queue (dev) | Render lepas dari request lifecycle, in-memory buat zero-config dev |
 | Worker | **Node.js standalone** (dijalankan via `tsx`) | FFmpeg butuh binary di filesystem + long-running |
 | Video render | **FFmpeg** (binary via `ffmpeg-static`) | Overlay statis = use case inti FFmpeg |
+| Thumbnail extract | **FFmpeg** (`signalstats` batch probe + `filter_complex` dual-output) + **dHash 64-bit** | 1 spawn probe + N spawn extract; dedup perseptual tanpa dep image processing baru |
 | Font metrics | **opentype.js** | Auto-fit text di canvas overlay |
 | LLM | **Vercel AI SDK v7** + `@ai-sdk/google` (Gemini) / `@ai-sdk/anthropic` (Claude) | Multi-provider dengan interface sama, structured output via zod |
 | Storage | **Cloudflare R2** (S3-compatible, via `@aws-sdk/client-s3`) / local filesystem | Egress gratis untuk prod, local untuk dev |
@@ -103,7 +104,28 @@ Abstraksi supaya sama-sama jalan di dev (filesystem) & prod (R2).
   - `r2.ts` → Cloudflare R2 via `@aws-sdk/client-s3` + `@aws-sdk/s3-request-presigner` (S3-compatible).
 - **Switch**: `STORAGE_DRIVER=local|r2` di env.
 
-### 10. UI Component Library
+### 11. Auto-Generate Thumbnail per Account
+Ekstrak N frame unik dari 1 video sumber → thumbnail berbeda per akun, dengan dedup perseptual supaya video statis (talking head, slide) tetap menghasilkan thumbnail unik antar akun. Menghindari deteksi konten duplikat oleh platform.
+
+- **Distribusi timestamp**: `src/lib/thumbnails/distribute.ts` bagi merata (min interval 0.3s, clamp + warning kalau durasi < N × min).
+- **Batch brightness probe**: `src/lib/thumbnails/probe.ts` — 1 FFmpeg spawn sample seluruh video via `fps=1/0.5,signalstats,metadata=print`. Threshold adaptif dari p25 sampling (floor 20, `0.7 × p25`), tidak hardcoded.
+- **Extract + hash combined**: `src/lib/thumbnails/extract.ts` — `filter_complex` dual-output: [thumb JPG] + [9×8 grayscale pipe:1] → dHash 64-bit dihitung langsung dari 72 raw bytes. Zero image-processing dep.
+- **Perseptual dedup**: `src/lib/thumbnails/dedup.ts` — Hamming distance pairwise (threshold 10). Kalau collision: walk ke kandidat brightMap layak, rehash (max 5×). Sisa collision → flag `similar: true` (warning badge, bukan fail).
+- **Async task**: POST `/api/thumbnails/generate` return `{ taskId }` langsung. Worker (queue existing) eksekusi via handler baru `"thumbnail-generation"`. State di Prisma `ThumbnailTask`. UI poll GET `/api/thumbnails/generate/[taskId]` tiap 1s.
+- **Override manual**: `src/app/create/thumbnail-preview.tsx` grid card per akun; `FileDropzone` inline → POST `/api/thumbnails/upload`. Partial override diperbolehkan.
+- **Aspect ratio**: match `Template.width/height` per akun (fallback `PLATFORM_ASPECT` di `src/lib/platforms.ts`).
+- **Non-blocking submit**: Submit selalu boleh tanpa tunggu generate. Worker rendition fallback ke behavior lama (extract detik 2 dari output) untuk akun tanpa `thumbnailKey`.
+- **Path & cleanup**: Preview di `thumbnails/preview/{taskId}/{accountId}_{w}x{h}.jpg`; saat submit di-copy ke `renditions/pre/{jobId}/{renditionId}/thumb.jpg`. Preview auto-expire 7 hari via R2 lifecycle (`docs/r2-lifecycle.json`) atau `pnpm cleanup-thumbnails` (local).
+- **Download bundle**: `{handle}_thumb.jpg` masuk ZIP di `/api/jobs/[id]/download`.
+- **Composite thumbnail + Cover embed** (Fase 6): worker post-render melakukan 2 langkah:
+  1. `src/lib/render/composite-thumbnail.ts` — apply frame PNG + intro card + drawtext ke raw thumbnail (single-frame FFmpeg reuse `buildFilterComplex` yang sama dengan render video). Hasilnya = image dengan branding style sama seperti frame video di detik 0-5, TAPI background pakai frame video unik per akun.
+  2. `src/lib/render/embed-cover.ts` — prepend composite thumbnail sebagai first frame video (~150ms) via `filter_complex concat + anullsrc`. Instagram/Reels default pick frame 0 sebagai cover → thumbnail unik + branded otomatis terpakai di feed tanpa user pilih manual.
+
+  Composite juga disimpan sebagai `Rendition.thumbnailKey` final → download bundle & job detail UI show versi ter-branded (bukan raw). Toggle: `EMBED_COVER_FRAME=false` untuk disable, `COVER_FRAME_DURATION_SEC=0.15` untuk tuning.
+
+Spawn budget per task (10 akun): 1 batch probe + 10 extract+hash + ≤5 dedup walk = **≤16 spawn**. Ditambah 1 encode pass per rendition untuk cover embed (opt-out via env).
+
+### 12. UI Component Library
 - `src/components/ui/` — komponen shadcn/ui (button, card, dialog, input, label, progress, select, skeleton, textarea, badge) di atas Radix.
 - `src/components/app-shell.tsx` — layout global.
 - `src/components/theme-provider.tsx` + `theme-toggle.tsx` — next-themes.
@@ -142,4 +164,5 @@ Env penting (`.env.example`):
 | `pnpm render` | Render satu video ad-hoc (debug FFmpeg pipeline) |
 | `pnpm db:push` / `db:migrate` / `db:studio` | Prisma workflow |
 | `pnpm fonts:fetch` | Download curated Google Fonts ke `public/fonts/` (idempoten, `--force` untuk overwrite) |
+| `pnpm cleanup-thumbnails` | Hapus file preview/uploaded thumbnail lokal yang mtime > 7 hari (jalankan via cron di prod-lite) |
 | `pnpm test` | Vitest |

@@ -16,7 +16,8 @@
     "render": "tsx scripts/render.ts",
     "worker": "tsx scripts/worker.ts",
     "submit-job": "tsx scripts/submit-job.ts",
-    "fonts:fetch": "tsx scripts/fetch-fonts.ts"
+    "fonts:fetch": "tsx scripts/fetch-fonts.ts",
+    "cleanup-thumbnails": "tsx scripts/cleanup-thumbnails.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.16",

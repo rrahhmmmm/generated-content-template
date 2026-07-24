@@ -2,12 +2,22 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { queue, ensureHandlersRegistered } from "@/lib/queue";
+import { storage } from "@/lib/storage";
+
+const thumbnailInputSchema = z.object({
+  accountId: z.string(),
+  thumbnailKey: z.string(), // path preview atau uploaded
+  source: z.enum(["AUTO", "MANUAL"]),
+  timestampSec: z.number().optional(),
+});
 
 const bodySchema = z.object({
   sourceKey: z.string().min(1),
+  sourceDuration: z.number().optional(),
   baseCaption: z.string().trim().min(1).max(5000),
   baseThumbText: z.string().trim().min(1).max(200),
   accountIds: z.array(z.string()).min(1).max(20),
+  thumbnails: z.array(thumbnailInputSchema).optional(),
 });
 
 export async function POST(req: Request) {
@@ -36,10 +46,15 @@ export async function POST(req: Request) {
     );
   }
 
-  // Buat Job + 10 Rendition dalam transaksi
+  const thumbnailByAccount = new Map(
+    (parsed.data.thumbnails ?? []).map((t) => [t.accountId, t])
+  );
+
+  // Buat Job + N Rendition
   const job = await prisma.job.create({
     data: {
       sourceKey: parsed.data.sourceKey,
+      sourceDuration: parsed.data.sourceDuration ?? null,
       baseCaption: parsed.data.baseCaption,
       baseThumbText: parsed.data.baseThumbText,
       status: "QUEUED",
@@ -52,6 +67,36 @@ export async function POST(req: Request) {
     },
     include: { renditions: true },
   });
+
+  // Copy thumbnail preview/uploaded → renditions/pre/{jobId}/{renditionId}/thumb.jpg
+  // supaya lifecycle rule R2 (7 hari untuk prefix thumbnails/preview & uploaded)
+  // tidak menghapus thumbnail yang sudah "milik" rendition.
+  await Promise.all(
+    job.renditions.map(async (r) => {
+      const input = thumbnailByAccount.get(r.accountId);
+      if (!input) return;
+      try {
+        const obj = await storage().get(input.thumbnailKey);
+        if (!obj) throw new Error(`Preview thumbnail tidak ditemukan: ${input.thumbnailKey}`);
+        const finalKey = `renditions/pre/${job.id}/${r.id}/thumb.jpg`;
+        await storage().put(finalKey, obj.buffer, obj.contentType || "image/jpeg");
+        await prisma.rendition.update({
+          where: { id: r.id },
+          data: {
+            thumbnailKey: finalKey,
+            thumbnailSource: input.source,
+            thumbnailTimestampSec: input.timestampSec ?? null,
+          },
+        });
+      } catch (err) {
+        // Non-fatal: worker akan fallback ke extract dari output (detik 2)
+        console.warn(
+          `[jobs] Gagal claim thumbnail untuk rendition ${r.id}: ${(err as Error).message}. ` +
+            `Worker akan fallback ke thumbnail default.`
+        );
+      }
+    })
+  );
 
   // Enqueue job-prep (LLM batch + fan-out ke render tasks)
   await ensureHandlersRegistered();

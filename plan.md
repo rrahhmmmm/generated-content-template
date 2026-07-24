@@ -588,3 +588,138 @@ Rate limit per user. Dead-letter queue untuk rendition yang gagal 3x. Cleanup fi
 **Video vertikal vs horizontal.** Klip user mungkin 16:9 sementara template 9:16. `scale` + `crop` di §5 menanganinya, tapi hasilnya memotong sisi. Tampilkan peringatan di `/create` kalau rasio sumber berbeda jauh dari template.
 
 **Biaya LLM naik kalau per-rendition.** Satu panggilan per job, bukan sepuluh. Sudah dirancang begitu di §6 — jangan diubah saat refactor.
+
+---
+
+## 12. Auto-Generate Thumbnail per Account (Fase 5 — pasca-build)
+
+### Motivasi
+
+Sepuluh rendition dari satu video sumber menghasilkan thumbnail yang isi framenya identik — cuma overlay yang beda (default: frame detik 2 dari output video, `process-rendition.ts:88`). Platform gampang menandai sebagai konten duplikat. Fase ini mengangkat unikitas thumbnail antar akun jadi urusan kelas satu: ekstrak N frame **berbeda** dari video sumber, lengkap dengan dedup perseptual supaya video statis (talking head, slide) tetap menghasilkan thumbnail unik.
+
+### Flow
+
+```
+User upload video → probeDuration disimpan di Job.sourceDuration
+User pilih akun + isi caption/thumbText
+User (opsional) klik "Generate Thumbnails":
+  POST /api/thumbnails/generate → { taskId } (langsung, non-blocking)
+    → create ThumbnailTask row (Prisma, status QUEUED)
+    → enqueue via queue existing (memory/bullmq) sebagai "thumbnail-generation"
+
+Worker ambil task:
+  1. Materialize source
+  2. BATCH probeBrightnessMap  ← 1 spawn FFmpeg (signalstats + metadata=print)
+  3. computeAdaptiveMinY dari p25 sampling (floor 20, 0.7 * p25)
+  4. distributeTimestamps(duration, N, min=0.3s)
+  5. Parallel extractFrameWithHash → filter_complex dual output (JPG + 9×8 gray)
+     dHash 64-bit dihitung tanpa dep image processing
+  6. dedupAndAdjust: Hamming pairwise; kalau <10, walk ke kandidat brightMap layak, max 5×
+     Tersisa → flag similar:true (bukan fail)
+  7. Upload key: thumbnails/preview/{taskId}/{accountId}_{w}x{h}.jpg
+  8. Update ThumbnailTask.items + status DONE
+
+UI poll GET /api/thumbnails/generate/[taskId] tiap 1s:
+  Grid card per akun, badge platform + timestamp, warning adjusted/similar
+  Tombol "Replace" → FileDropzone → POST /api/thumbnails/upload → override
+
+Submit (SELALU boleh, non-blocking):
+  POST /api/jobs body extend thumbnails[]? (partial OK)
+    Untuk tiap entry: copy preview/uploaded → renditions/pre/{jobId}/{renditionId}/thumb.jpg
+    Set Rendition.thumbnailKey + thumbnailSource + thumbnailTimestampSec
+
+Worker rendition:
+  if (rendition.thumbnailKey) → skip extract (pre-job sudah)
+  else → fallback: extract detik 2 dari output (behavior lama)
+```
+
+### Data model tambahan
+
+```prisma
+model Rendition {
+  // ...existing...
+  thumbnailSource       String?  // "AUTO" | "MANUAL"
+  thumbnailTimestampSec Float?
+}
+
+model ThumbnailTask {
+  id        String   @id @default(cuid())
+  sourceKey String
+  status    String   @default("QUEUED")   // QUEUED | RUNNING | DONE | FAILED
+  progress  String   @default("{}")        // JSON { done, total }
+  items     String   @default("[]")        // JSON GeneratedThumb[]
+  warnings  String   @default("[]")        // JSON string[]
+  error     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+```
+
+`Job.sourceDuration` sudah ada — mulai diisi di `/api/uploads/video`.
+
+### Boundary yang tidak boleh kabur
+
+**Submit tidak pernah di-block oleh thumbnail.** Kalau task fail, user skip, atau sebagian akun tidak ter-generate — submit tetap jalan. Worker fallback ke behavior lama (extract detik 2 dari output). Ini kontrak: "auto-thumbnail" is best-effort, bukan pre-requisite.
+
+**Dedup perseptual, bukan cuma brightness.** Filter brightness saja tidak cukup untuk video statis. `dedup.ts` dengan dHash 64-bit + Hamming distance adalah alasan utama fitur ini ada; jangan disederhanakan jadi "extract merata sepanjang durasi".
+
+**Thumbnail preview terpisah dari final.** Pre-job path `thumbnails/preview/{taskId}/...` bersifat sementara (R2 lifecycle 7 hari). Saat submit, file **di-copy** ke `renditions/pre/{jobId}/{renditionId}/thumb.jpg` — path final. Jangan simpan `preview/...` langsung sebagai Rendition.thumbnailKey; lifecycle akan menghapusnya.
+
+**Batch probe = 1 spawn.** Anti-pattern lama: per-timestamp brightness check (10 akun × ≤7 walk = up to 70 spawn per task). Sekarang: 1 spawn seluruh video via `fps=1/0.5,signalstats,metadata=print:file=-`. Kalau code review menemukan `spawn(FFMPEG_BIN, [..., "signalstats", ...])` di dalam loop, itu regresi.
+
+**Task async via queue existing.** Jangan bikin infra baru (Redis task queue terpisah, cron scheduler). Reuse `src/lib/queue/` — 2 job type: `"rendition"` dan `"thumbnail-generation"`. State di Prisma `ThumbnailTask`. Multi-instance safe, dev-friendly (JOB_QUEUE=memory tetap jalan).
+
+### Spawn budget per task (10 akun)
+
+| Operasi | Spawn |
+|---|---|
+| Batch brightness probe | 1 |
+| Extract frame + dHash (combined) | 10 |
+| Dedup walk retry (bounded) | ≤ 5 |
+| **Total** | **≤ 16** |
+
+Regresi threshold: kalau kena >20 spawn per task, ada bug di dedup loop atau probe dipanggil di luar batch.
+
+### Cleanup
+
+- **R2 prod:** lifecycle rule 7 hari untuk `thumbnails/preview/` dan `thumbnails/uploaded/` (config di `docs/r2-lifecycle.json`).
+- **Local dev:** `scripts/cleanup-thumbnails.ts` (via `pnpm cleanup-thumbnails`), hapus file mtime > 7 hari.
+
+### Extension: Composite Thumbnail + Cover Frame Embed (Fase 6)
+
+Instagram/Reels default pilih **frame 0** sebagai cover kalau user tidak set manual. Supaya thumbnail unik yang sudah kita generate benar-benar kepakai (bukan cuma di bundle download), worker post-render melakukan 2 step:
+
+**Step A — Composite (`src/lib/render/composite-thumbnail.ts`):**
+Raw thumbnail (frame video mentah, unik per akun) di-composite dengan frame overlay + intro card + drawtext — menghasilkan single-frame image dengan branding style yang IDENTIK dengan frame video di detik 0-5. Reuse `buildFilterComplex()` + `computeIntroFit()` dari pipeline render utama; bedanya: input 0 = image (bukan video), output = `-frames:v 1` JPG.
+
+**Step B — Embed (`src/lib/render/embed-cover.ts`):**
+Composite thumbnail di-prepend sebagai first frame video via FFmpeg:
+
+```
+[composite.jpg loop 150ms] + [rendered_video]  →  final.mp4
+         ↑                          ↑
+  scale2ref conform ke          h264+aac, +faststart
+  dim video (auto)
+```
+
+Audio: `anullsrc` silence 150ms di-concat dengan audio video supaya sinkron.
+
+**Boundary yang tidak boleh kabur (Fase 6):**
+
+**Composite ≠ raw thumbnail.** Raw thumbnail = background frame per akun (unik). Composite = raw + template overlay (unik + branded). Kalau ada kode yang embed raw thumbnail langsung tanpa composite, frame 0 Reels akan kehilangan frame overlay + text — bug yang paling gampang di-regress karena "kayaknya cukup pakai thumbnail apa adanya".
+
+**Composite jadi final `Rendition.thumbnailKey`.** DB thumbnailKey selalu point ke composite version (`renditions/{jobId}/{renditionId}/thumb.jpg`). Preview UI di `/create` show raw (state pre-submit, before worker); job detail + download bundle show composite (state post-render).
+
+**Extract fallback dari SOURCE, bukan output.** Kalau user skip pre-job generate, worker extract fallback thumbnail dari `sourcePath` (video sumber), bukan `outputPath` (video ter-render). Alasan: composite akan apply overlay lagi — kalau background sudah punya overlay dari output, hasil = double overlay. Skip source-extract → skip regression.
+
+Toggle:
+- `EMBED_COVER_FRAME=false` — disable (default: enabled)
+- `COVER_FRAME_DURATION_SEC=0.15` — tuning durasi flash
+
+Cost: 1 composite spawn (~150ms) + 1 embed encode pass (~1-2 detik) per rendition. Semua rendition selalu composite + embed (baik pre-job maupun fallback thumbnail) supaya perilaku konsisten.
+
+Trade-off: user akan lihat "flash" cover ~150ms di awal Reel. Diterima sebagai splash pattern yang umum di Reels.
+
+### Out of Scope (V2)
+
+Blur detection (Laplacian variance), regenerate satu thumbnail dari job-detail, editor manual crop/color, face detection, auto-upload via Instagram Graph API (zero-touch posting).

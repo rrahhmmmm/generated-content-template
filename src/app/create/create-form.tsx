@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
 import { PLATFORM_LABEL, PLATFORM_THUMB_MAX, type Platform } from "@/lib/platforms";
+import { ThumbnailPreview, type ThumbnailEntry } from "./thumbnail-preview";
 
 type AccountRow = {
   id: string;
@@ -32,6 +33,9 @@ export function CreateForm({ accounts }: { accounts: AccountRow[] }) {
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [caption, setCaption] = useState("");
   const [thumbText, setThumbText] = useState("");
+  const [sourceKey, setSourceKey] = useState<string | null>(null);
+  const [sourceDuration, setSourceDuration] = useState<number | null>(null);
+  const [thumbnails, setThumbnails] = useState<Map<string, ThumbnailEntry>>(new Map());
 
   // Default: semua akun aktif+template tercentang. Yang tanpa template disabled.
   const [selected, setSelected] = useState<Set<string>>(() => {
@@ -68,13 +72,20 @@ export function CreateForm({ accounts }: { accounts: AccountRow[] }) {
 
   const canSubmit =
     file !== null &&
+    sourceKey !== null &&
     caption.trim().length > 0 &&
     thumbText.trim().length > 0 &&
     selected.size > 0 &&
     !uploading;
 
-  function handleFilePick(f: File | null) {
+  // Akun terpilih yang belum punya thumbnail pre-job → akan pakai fallback default.
+  const missingThumbCount = Array.from(selected).filter((id) => !thumbnails.has(id)).length;
+
+  async function handleFilePick(f: File | null) {
     setError(null);
+    setSourceKey(null);
+    setSourceDuration(null);
+    setThumbnails(new Map());
     if (!f) return setFile(null);
     if (f.size > MAX_VIDEO_BYTES) {
       setError(`Video terlalu besar. Maksimum ${MAX_VIDEO_BYTES / 1e6} MB.`);
@@ -85,6 +96,20 @@ export function CreateForm({ accounts }: { accounts: AccountRow[] }) {
       return;
     }
     setFile(f);
+    // Upload otomatis di background supaya sourceKey siap untuk thumbnail generator
+    setUploading(true);
+    setProgress(0);
+    try {
+      const result = await uploadWithProgress(f, (p) => setProgress(p));
+      setSourceKey(result.key);
+      setSourceDuration(result.duration ?? null);
+      setProgress(100);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Upload gagal");
+      setFile(null);
+    } finally {
+      setUploading(false);
+    }
   }
 
   function toggleAccount(id: string) {
@@ -97,24 +122,36 @@ export function CreateForm({ accounts }: { accounts: AccountRow[] }) {
   }
 
   async function submit() {
-    if (!file || !canSubmit) return;
+    if (!canSubmit || !sourceKey) return;
     setError(null);
     setUploading(true);
-    setProgress(0);
+    setProgress(100);
 
     try {
-      // 1. Upload video via XHR untuk dapat progress
-      const uploadResult = await uploadWithProgress(file, (p) => setProgress(p));
-      // 2. POST /api/jobs
-      setProgress(100);
+      // Hanya sertakan thumbnail untuk akun yang terpilih
+      const thumbnailPayload = Array.from(selected)
+        .map((accountId) => {
+          const t = thumbnails.get(accountId);
+          if (!t) return null;
+          return {
+            accountId,
+            thumbnailKey: t.key,
+            source: t.source,
+            timestampSec: t.timestampSec,
+          };
+        })
+        .filter((x): x is NonNullable<typeof x> => x !== null);
+
       const res = await fetch("/api/jobs", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          sourceKey: uploadResult.key,
+          sourceKey,
+          sourceDuration,
           baseCaption: caption.trim(),
           baseThumbText: thumbText.trim(),
           accountIds: [...selected],
+          thumbnails: thumbnailPayload.length > 0 ? thumbnailPayload : undefined,
         }),
       });
       if (!res.ok) {
@@ -169,6 +206,9 @@ export function CreateForm({ accounts }: { accounts: AccountRow[] }) {
                     size="sm"
                     onClick={() => {
                       setFile(null);
+                      setSourceKey(null);
+                      setSourceDuration(null);
+                      setThumbnails(new Map());
                       if (fileInputRef.current) fileInputRef.current.value = "";
                     }}
                     disabled={uploading}
@@ -291,6 +331,21 @@ export function CreateForm({ accounts }: { accounts: AccountRow[] }) {
         </CardContent>
       </Card>
 
+      {/* Step 4: Thumbnail preview (opsional, non-blocking) */}
+      <ThumbnailPreview
+        sourceKey={sourceKey}
+        selectedAccounts={activeAccounts
+          .filter((a) => selected.has(a.id))
+          .map((a) => ({
+            id: a.id,
+            handle: a.handle,
+            platform: a.platform,
+            displayName: a.displayName,
+          }))}
+        thumbnails={thumbnails}
+        onChange={setThumbnails}
+      />
+
       {/* Submit bar */}
       <div className="sticky bottom-4 flex items-center gap-3 rounded-md border border-border bg-surface p-3 shadow-sm">
         <Button onClick={submit} disabled={!canSubmit}>
@@ -311,7 +366,13 @@ export function CreateForm({ accounts }: { accounts: AccountRow[] }) {
           </div>
         ) : (
           <span className="text-caption text-text-muted">
-            {file ? "Siap dikirim." : "Upload video dulu, lalu isi caption + thumbnail."}
+            {!file
+              ? "Upload video dulu, lalu isi caption + thumbnail."
+              : missingThumbCount > 0 && thumbnails.size > 0
+                ? `Siap dikirim. ${missingThumbCount} akun akan pakai thumbnail default (frame detik 2 dari video hasil).`
+                : missingThumbCount > 0
+                  ? `Siap dikirim. Semua akun akan pakai thumbnail default (frame detik 2). Klik "Generate Thumbnails" untuk thumbnail unik per akun.`
+                  : "Siap dikirim."}
           </span>
         )}
       </div>
@@ -322,7 +383,7 @@ export function CreateForm({ accounts }: { accounts: AccountRow[] }) {
 function uploadWithProgress(
   file: File,
   onProgress: (p: number) => void
-): Promise<{ key: string; url: string }> {
+): Promise<{ key: string; url: string; duration?: number | null }> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", "/api/uploads/video");

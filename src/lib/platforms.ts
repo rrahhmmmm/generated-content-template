@@ -13,3 +13,12 @@ export const PLATFORM_THUMB_MAX: Record<Platform, number> = {
   INSTAGRAM: 80,
   YOUTUBE: 100,
 };
+
+// Default aspect ratio per platform untuk thumbnail generator. Digunakan sebagai
+// fallback kalau akun belum punya template; kalau punya, template.width/height
+// yang jadi source of truth (akun boleh customize).
+export const PLATFORM_ASPECT: Record<Platform, { w: number; h: number }> = {
+  TIKTOK: { w: 1080, h: 1920 },
+  INSTAGRAM: { w: 1080, h: 1920 },
+  YOUTUBE: { w: 1080, h: 1920 }, // Shorts default; override via template
+};

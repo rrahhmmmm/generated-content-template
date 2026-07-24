@@ -42,6 +42,15 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
           if (!obj) continue;
           const handle = r.account.handle.replace(/[^a-z0-9._-]+/gi, "_");
           archive.append(obj.buffer, { name: `${handle}.mp4` });
+
+          // Thumbnail per akun (Fase 5: sudah unik per akun kalau di-generate pre-job)
+          if (r.thumbnailKey) {
+            const thumb = await s.get(r.thumbnailKey);
+            if (thumb) {
+              archive.append(thumb.buffer, { name: `${handle}_thumb.jpg` });
+            }
+          }
+
           captionLines.push(`=== ${r.account.handle} ===`);
           captionLines.push(`Thumbnail: ${r.thumbText ?? ""}`);
           captionLines.push(`Caption:`);

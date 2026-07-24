@@ -1,0 +1,16 @@
+{
+  "Rules": [
+    {
+      "ID": "expire-preview-thumbnails",
+      "Status": "Enabled",
+      "Filter": { "Prefix": "thumbnails/preview/" },
+      "Expiration": { "Days": 7 }
+    },
+    {
+      "ID": "expire-uploaded-thumbnails-unclaimed",
+      "Status": "Enabled",
+      "Filter": { "Prefix": "thumbnails/uploaded/" },
+      "Expiration": { "Days": 7 }
+    }
+  ]
+}
