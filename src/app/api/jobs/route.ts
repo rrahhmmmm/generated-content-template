@@ -6,19 +6,45 @@ import { storage } from "@/lib/storage";
 
 const thumbnailInputSchema = z.object({
   accountId: z.string(),
-  thumbnailKey: z.string(), // path preview atau uploaded
+  thumbnailKey: z.string(),
   source: z.enum(["AUTO", "MANUAL"]),
   timestampSec: z.number().optional(),
 });
 
-const bodySchema = z.object({
-  sourceKey: z.string().min(1),
-  sourceDuration: z.number().optional(),
-  baseCaption: z.string().trim().min(1).max(5000),
-  baseThumbText: z.string().trim().min(1).max(200),
-  accountIds: z.array(z.string()).min(1).max(20),
-  thumbnails: z.array(thumbnailInputSchema).optional(),
-});
+const bodySchema = z
+  .object({
+    sourceKey: z.string().min(1),
+    sourceDuration: z.number().optional(),
+    baseCaption: z.string().trim().min(1).max(5000),
+    baseThumbText: z.string().trim().min(1).max(200),
+    groupIds: z.array(z.string()).default([]),
+    accountIds: z.array(z.string()).default([]),
+    thumbnails: z.array(thumbnailInputSchema).optional(),
+  })
+  .refine((d) => d.groupIds.length > 0 || d.accountIds.length > 0, {
+    message: "Minimal satu group atau satu akun harus dipilih",
+    path: ["accountIds"],
+  });
+
+type Excluded = {
+  id: string;
+  handle: string;
+  reason: "INACTIVE" | "NO_TEMPLATE" | "NOT_FOUND";
+};
+
+class NoValidAccountsError extends Error {
+  constructor(public excluded: Excluded[], public missingGroups: string[], public reason: "EMPTY" | "ALL_INVALID") {
+    super("no-valid-accounts");
+  }
+}
+
+class TooManyAccountsError extends Error {
+  constructor(public total: number, public max: number) {
+    super("too-many-accounts");
+  }
+}
+
+const MAX_RENDITIONS_PER_JOB = 20;
 
 export async function POST(req: Request) {
   const body = await req.json().catch(() => null);
@@ -27,58 +53,135 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  // Verifikasi akun ada + punya template
-  const accounts = await prisma.account.findMany({
-    where: { id: { in: parsed.data.accountIds }, isActive: true },
-    include: { template: { select: { id: true } } },
-  });
-  if (accounts.length !== parsed.data.accountIds.length) {
-    return NextResponse.json({ error: "Sebagian akun tidak ditemukan atau nonaktif" }, { status: 400 });
-  }
-  const missingTemplate = accounts.filter((a) => !a.template);
-  if (missingTemplate.length > 0) {
-    return NextResponse.json(
-      {
-        error: "Sebagian akun belum punya template",
-        missing: missingTemplate.map((a) => ({ id: a.id, handle: a.handle })),
-      },
-      { status: 400 }
-    );
-  }
-
   const thumbnailByAccount = new Map(
     (parsed.data.thumbnails ?? []).map((t) => [t.accountId, t])
   );
 
-  // Buat Job + N Rendition
-  const job = await prisma.job.create({
-    data: {
-      sourceKey: parsed.data.sourceKey,
-      sourceDuration: parsed.data.sourceDuration ?? null,
-      baseCaption: parsed.data.baseCaption,
-      baseThumbText: parsed.data.baseThumbText,
-      status: "QUEUED",
-      renditions: {
-        create: accounts.map((a) => ({
+  let result: {
+    jobId: string;
+    status: string;
+    renditions: Array<{ id: string; accountId: string }>;
+    validAccountIds: string[];
+    excluded: Excluded[];
+    missingGroups: string[];
+  };
+
+  try {
+    result = await prisma.$transaction(async (tx) => {
+      // 1. Resolve group → accountIds
+      const groups = parsed.data.groupIds.length > 0
+        ? await tx.group.findMany({
+            where: { id: { in: parsed.data.groupIds } },
+            include: { accounts: { select: { id: true } } },
+          })
+        : [];
+      const foundGroupIds = new Set(groups.map((g) => g.id));
+      const missingGroups = parsed.data.groupIds.filter((id) => !foundGroupIds.has(id));
+      const groupAccountIds = groups.flatMap((g) => g.accounts.map((a) => a.id));
+
+      const requestedIds = Array.from(
+        new Set([...groupAccountIds, ...parsed.data.accountIds])
+      );
+
+      if (requestedIds.length === 0) {
+        throw new NoValidAccountsError([], missingGroups, "EMPTY");
+      }
+
+      // 2. Validate accounts di snapshot yang sama
+      const accounts = await tx.account.findMany({
+        where: { id: { in: requestedIds } },
+        include: { template: { select: { id: true } } },
+      });
+
+      const excluded: Excluded[] = [];
+      const foundIds = new Set(accounts.map((a) => a.id));
+      for (const id of requestedIds) {
+        if (!foundIds.has(id)) {
+          excluded.push({ id, handle: id, reason: "NOT_FOUND" });
+        }
+      }
+      const validAccounts = accounts.filter((a) => {
+        if (!a.isActive) {
+          excluded.push({ id: a.id, handle: a.handle, reason: "INACTIVE" });
+          return false;
+        }
+        if (!a.template) {
+          excluded.push({ id: a.id, handle: a.handle, reason: "NO_TEMPLATE" });
+          return false;
+        }
+        return true;
+      });
+
+      if (validAccounts.length === 0) {
+        throw new NoValidAccountsError(excluded, missingGroups, "ALL_INVALID");
+      }
+      if (validAccounts.length > MAX_RENDITIONS_PER_JOB) {
+        throw new TooManyAccountsError(validAccounts.length, MAX_RENDITIONS_PER_JOB);
+      }
+
+      // 3. Create Job + Rendition atomically
+      const job = await tx.job.create({
+        data: {
+          sourceKey: parsed.data.sourceKey,
+          sourceDuration: parsed.data.sourceDuration ?? null,
+          baseCaption: parsed.data.baseCaption,
+          baseThumbText: parsed.data.baseThumbText,
+          status: "QUEUED",
+        },
+      });
+      await tx.rendition.createMany({
+        data: validAccounts.map((a) => ({
+          jobId: job.id,
           accountId: a.id,
           status: "PENDING",
         })),
-      },
-    },
-    include: { renditions: true },
-  });
+      });
+      // SQLite createMany tidak return IDs — refetch di transaksi yang sama
+      const renditions = await tx.rendition.findMany({
+        where: { jobId: job.id },
+        select: { id: true, accountId: true },
+      });
 
-  // Copy thumbnail preview/uploaded → renditions/pre/{jobId}/{renditionId}/thumb.jpg
-  // supaya lifecycle rule R2 (7 hari untuk prefix thumbnails/preview & uploaded)
-  // tidak menghapus thumbnail yang sudah "milik" rendition.
+      return {
+        jobId: job.id,
+        status: job.status,
+        renditions,
+        validAccountIds: validAccounts.map((a) => a.id),
+        excluded,
+        missingGroups,
+      };
+    });
+  } catch (err) {
+    if (err instanceof NoValidAccountsError) {
+      const message =
+        err.reason === "EMPTY"
+          ? "Group terpilih kosong. Tambahkan anggota group atau pilih akun manual."
+          : "Tidak ada akun valid setelah resolusi (semua akun nonaktif atau belum punya template).";
+      return NextResponse.json(
+        { error: message, excluded: err.excluded, missingGroups: err.missingGroups },
+        { status: 400 }
+      );
+    }
+    if (err instanceof TooManyAccountsError) {
+      return NextResponse.json(
+        {
+          error: `Total akun setelah resolusi (${err.total}) melebihi batas ${err.max}. Kurangi group atau akun manual.`,
+        },
+        { status: 400 }
+      );
+    }
+    throw err;
+  }
+
+  // 4. SETELAH commit: copy thumbnail preview → final (best-effort, keluar dari tx)
   await Promise.all(
-    job.renditions.map(async (r) => {
+    result.renditions.map(async (r) => {
       const input = thumbnailByAccount.get(r.accountId);
       if (!input) return;
       try {
         const obj = await storage().get(input.thumbnailKey);
         if (!obj) throw new Error(`Preview thumbnail tidak ditemukan: ${input.thumbnailKey}`);
-        const finalKey = `renditions/pre/${job.id}/${r.id}/thumb.jpg`;
+        const finalKey = `renditions/pre/${result.jobId}/${r.id}/thumb.jpg`;
         await storage().put(finalKey, obj.buffer, obj.contentType || "image/jpeg");
         await prisma.rendition.update({
           where: { id: r.id },
@@ -98,10 +201,20 @@ export async function POST(req: Request) {
     })
   );
 
-  // Enqueue job-prep (LLM batch + fan-out ke render tasks)
+  // 5. Enqueue setelah commit + I/O — kalau rollback, worker tidak pernah lihat job palsu
   await ensureHandlersRegistered();
   const q = await queue();
-  await q.enqueue("job-prep", { jobId: job.id });
+  await q.enqueue("job-prep", { jobId: result.jobId });
 
-  return NextResponse.json({ id: job.id, status: job.status, renditionCount: job.renditions.length }, { status: 201 });
+  return NextResponse.json(
+    {
+      id: result.jobId,
+      status: result.status,
+      renditionCount: result.renditions.length,
+      finalAccountIds: result.validAccountIds,
+      excluded: result.excluded,
+      missingGroups: result.missingGroups,
+    },
+    { status: 201 }
+  );
 }

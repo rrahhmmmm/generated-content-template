@@ -4,10 +4,16 @@ import { CreateForm } from "./create-form";
 export const dynamic = "force-dynamic";
 
 export default async function CreatePage() {
-  const accounts = await prisma.account.findMany({
-    orderBy: { handle: "asc" },
-    include: { template: { select: { id: true } } },
-  });
+  const [accounts, groups] = await Promise.all([
+    prisma.account.findMany({
+      orderBy: { handle: "asc" },
+      include: { template: { select: { id: true } } },
+    }),
+    prisma.group.findMany({
+      orderBy: { name: "asc" },
+      include: { accounts: { select: { id: true } } },
+    }),
+  ]);
 
   return (
     <div className="flex flex-col gap-6">
@@ -26,6 +32,12 @@ export default async function CreatePage() {
           displayName: a.displayName,
           isActive: a.isActive,
           hasTemplate: Boolean(a.template),
+        }))}
+        groups={groups.map((g) => ({
+          id: g.id,
+          name: g.name,
+          description: g.description,
+          accountIds: g.accounts.map((a) => a.id),
         }))}
       />
     </div>

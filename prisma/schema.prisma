@@ -25,7 +25,20 @@ model Account {
   promptStyle String?
   template    Template?
   renditions  Rendition[]
+  groups      Group[]     @relation("GroupAccounts")
   createdAt   DateTime    @default(now())
+}
+
+// Kumpulan Account untuk mempermudah pemilihan di /create.
+// Group adalah UI-level convenience; endpoint job/thumbnail tetap bekerja
+// dengan flat accountIds. Union group + akun manual di-resolve di server.
+model Group {
+  id          String    @id @default(cuid())
+  name        String    @unique
+  description String?
+  accounts    Account[] @relation("GroupAccounts")
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 }
 
 // Konfigurasi prompt LLM. Singleton — hanya satu row dengan id="global".
