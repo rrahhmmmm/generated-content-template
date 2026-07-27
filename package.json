@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "prisma generate && prisma db push --accept-data-loss --skip-generate && next build",
     "start": "next start",
     "lint": "eslint",
     "db:generate": "node node_modules/prisma/build/index.js generate",

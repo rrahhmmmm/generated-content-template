@@ -11,6 +11,7 @@ const PUBLIC_PATHS = new Set<string>([
   "/api/auth/login",
   "/api/auth/register",
   "/api/auth/logout",
+  "/api/healthz",
 ]);
 
 const COOKIE_NAME = process.env.SESSION_COOKIE_NAME || "genc_session";
