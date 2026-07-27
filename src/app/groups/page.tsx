@@ -4,10 +4,12 @@ import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/empty-state";
 import { GroupDialog } from "./group-dialog";
 import { DeleteGroupButton } from "./delete-group-button";
+import { requireUserPage } from "@/lib/auth/session";
 
 export const dynamic = "force-dynamic";
 
 export default async function GroupsPage() {
+  await requireUserPage("/groups");
   const [groups, accounts] = await Promise.all([
     prisma.group.findMany({
       orderBy: { name: "asc" },

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { storage } from "@/lib/storage";
+import { assertUser } from "@/lib/auth/session";
 
 const MAX_BYTES = 5 * 1024 * 1024; // 5 MB
 const ALLOWED = new Set(["image/jpeg", "image/png", "image/webp"]);
@@ -8,6 +9,8 @@ export const runtime = "nodejs";
 export const maxDuration = 30;
 
 export async function POST(req: Request) {
+  const gate = await assertUser();
+  if (gate) return gate;
   const form = await req.formData();
   const file = form.get("file");
   if (!(file instanceof File)) {

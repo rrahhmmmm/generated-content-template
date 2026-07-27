@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
+import { assertUser } from "@/lib/auth/session";
 
 // Koordinat pixel boleh float — FFmpeg dan canvas render tetap benar (dibulatkan
 // saat drawtext dibangun). Batasi hanya finite + non-negative.
@@ -64,6 +65,8 @@ const bodySchema = z.object({
 });
 
 export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> }) {
+  const gate = await assertUser();
+  if (gate) return gate;
   const { id } = await ctx.params;
   const template = await prisma.template.findUnique({ where: { accountId: id } });
   if (!template) return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -71,6 +74,8 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
 }
 
 export async function PUT(req: Request, ctx: { params: Promise<{ id: string }> }) {
+  const gate = await assertUser();
+  if (gate) return gate;
   const { id } = await ctx.params;
   const body = await req.json().catch(() => null);
   const parsed = bodySchema.safeParse(body);

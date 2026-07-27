@@ -4,6 +4,7 @@ import path from "node:path";
 import os from "node:os";
 import { storage } from "@/lib/storage";
 import { probeDuration } from "@/lib/render";
+import { assertUser } from "@/lib/auth/session";
 
 const MAX_BYTES = 200 * 1024 * 1024; // 200 MB — batas Next.js untuk upload langsung
 const ALLOWED = new Set(["video/mp4", "video/quicktime", "video/webm", "video/x-m4v"]);
@@ -12,6 +13,8 @@ export const runtime = "nodejs";
 export const maxDuration = 60;
 
 export async function POST(req: Request) {
+  const gate = await assertUser();
+  if (gate) return gate;
   const form = await req.formData();
   const file = form.get("file");
   if (!(file instanceof File)) {

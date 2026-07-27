@@ -1,9 +1,11 @@
 import { prisma } from "@/lib/db";
 import { CreateForm } from "./create-form";
+import { requireUserPage } from "@/lib/auth/session";
 
 export const dynamic = "force-dynamic";
 
 export default async function CreatePage() {
+  await requireUserPage("/create");
   const [accounts, groups] = await Promise.all([
     prisma.account.findMany({
       orderBy: { handle: "asc" },

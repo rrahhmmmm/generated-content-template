@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { PLATFORMS } from "@/lib/platforms";
+import { assertUser } from "@/lib/auth/session";
 
 const patchSchema = z.object({
   handle: z.string().trim().min(2).max(64).optional(),
@@ -13,6 +14,8 @@ const patchSchema = z.object({
 });
 
 export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> }) {
+  const gate = await assertUser();
+  if (gate) return gate;
   const { id } = await ctx.params;
   const account = await prisma.account.findUnique({
     where: { id },
@@ -23,6 +26,8 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
 }
 
 export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }> }) {
+  const gate = await assertUser();
+  if (gate) return gate;
   const { id } = await ctx.params;
   const body = await req.json().catch(() => null);
   const parsed = patchSchema.safeParse(body);
@@ -49,6 +54,8 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
 }
 
 export async function DELETE(_req: Request, ctx: { params: Promise<{ id: string }> }) {
+  const gate = await assertUser();
+  if (gate) return gate;
   const { id } = await ctx.params;
   await prisma.account.delete({ where: { id } }).catch(() => null);
   return NextResponse.json({ ok: true });

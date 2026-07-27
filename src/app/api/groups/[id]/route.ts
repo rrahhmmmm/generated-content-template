@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
+import { assertUser } from "@/lib/auth/session";
 
 const patchSchema = z.object({
   name: z.string().trim().min(1).max(80).optional(),
@@ -9,6 +10,8 @@ const patchSchema = z.object({
 });
 
 export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> }) {
+  const gate = await assertUser();
+  if (gate) return gate;
   const { id } = await ctx.params;
   const group = await prisma.group.findUnique({
     where: { id },
@@ -24,6 +27,8 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
 }
 
 export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }> }) {
+  const gate = await assertUser();
+  if (gate) return gate;
   const { id } = await ctx.params;
   const body = await req.json().catch(() => null);
   const parsed = patchSchema.safeParse(body);
@@ -77,6 +82,8 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
 }
 
 export async function DELETE(_req: Request, ctx: { params: Promise<{ id: string }> }) {
+  const gate = await assertUser();
+  if (gate) return gate;
   const { id } = await ctx.params;
   await prisma.group.delete({ where: { id } }).catch(() => null);
   return NextResponse.json({ ok: true });

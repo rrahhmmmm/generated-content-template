@@ -152,6 +152,26 @@ Env penting (`.env.example`):
 - `STORAGE_DRIVER` — `local` | `r2`
 - `JOB_QUEUE` — `memory` | `bullmq` (butuh `REDIS_URL`)
 - `LLM_PROVIDER` — `gemini` | `anthropic-gateway` | `anthropic-direct` + API key masing-masing
+- `SESSION_PASSWORD` — 32+ karakter random untuk enkripsi cookie iron-session. Generate: `openssl rand -base64 48`. **Wajib** — server tidak start tanpa ini.
+- `SESSION_COOKIE_NAME` — default `genc_session`
+
+## Bootstrap Admin Pertama
+
+Setelah `pnpm db:push`, tabel `User` kosong. Buat admin pertama manual (tidak ada seed script otomatis by design):
+
+```bash
+# 1. Generate bcrypt hash untuk password admin (ganti PASSWORD_ANDA)
+node -e "console.log(require('bcryptjs').hashSync('PASSWORD_ANDA', 10))"
+# Output contoh: $2a$10$abc...
+
+# 2a. SQLite dev (default)
+sqlite3 prisma/dev.db "INSERT INTO User (id, email, passwordHash, name, role, status, createdAt, updatedAt) VALUES ('admin_seed_1', 'admin@example.com', '<PASTE_HASH>', 'Admin', 'ADMIN', 'ACTIVE', datetime('now'), datetime('now'));"
+
+# 2b. Postgres produksi
+psql $DATABASE_URL -c "INSERT INTO \"User\" (id, email, \"passwordHash\", name, role, status, \"createdAt\", \"updatedAt\") VALUES ('admin_seed_1', 'admin@example.com', '<PASTE_HASH>', 'Admin', 'ADMIN', 'ACTIVE', NOW(), NOW());"
+```
+
+Login di `/login` dengan email + password tsb. User berikutnya bisa register via `/register` (default status `PENDING`) — admin approve di `/admin/users`.
 
 ## Scripts
 

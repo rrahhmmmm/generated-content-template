@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { loadPromptConfig } from "@/lib/prompt-config";
+import { assertUser } from "@/lib/auth/session";
 
 const bodySchema = z.object({
   systemPrompt: z.string().trim().min(10).max(10000),
@@ -11,11 +12,15 @@ const bodySchema = z.object({
 });
 
 export async function GET() {
+  const gate = await assertUser();
+  if (gate) return gate;
   const config = await loadPromptConfig();
   return NextResponse.json(config);
 }
 
 export async function PUT(req: Request) {
+  const gate = await assertUser();
+  if (gate) return gate;
   const body = await req.json().catch(() => null);
   const parsed = bodySchema.safeParse(body);
   if (!parsed.success) {

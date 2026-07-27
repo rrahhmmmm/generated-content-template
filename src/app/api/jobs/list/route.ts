@@ -1,10 +1,13 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { storage } from "@/lib/storage";
+import { assertUser } from "@/lib/auth/session";
 
 // Riwayat job untuk halaman /jobs. Ambil 50 terbaru, sertakan summary status
 // agar tabel bisa tampilkan "X dari Y selesai" tanpa fetch tambahan.
 export async function GET() {
+  const gate = await assertUser();
+  if (gate) return gate;
   const jobs = await prisma.job.findMany({
     orderBy: { createdAt: "desc" },
     take: 50,

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { queue, ensureHandlersRegistered } from "@/lib/queue";
 import { storage } from "@/lib/storage";
+import { assertUser } from "@/lib/auth/session";
 
 const thumbnailInputSchema = z.object({
   accountId: z.string(),
@@ -47,6 +48,8 @@ class TooManyAccountsError extends Error {
 const MAX_RENDITIONS_PER_JOB = 20;
 
 export async function POST(req: Request) {
+  const gate = await assertUser();
+  if (gate) return gate;
   const body = await req.json().catch(() => null);
   const parsed = bodySchema.safeParse(body);
   if (!parsed.success) {

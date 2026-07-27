@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { queue, ensureHandlersRegistered } from "@/lib/queue";
+import { assertUser } from "@/lib/auth/session";
 
 const bodySchema = z.object({
   sourceKey: z.string().min(1),
@@ -11,6 +12,8 @@ const bodySchema = z.object({
 export const runtime = "nodejs";
 
 export async function POST(req: Request) {
+  const gate = await assertUser();
+  if (gate) return gate;
   const body = await req.json().catch(() => null);
   const parsed = bodySchema.safeParse(body);
   if (!parsed.success) {

@@ -1,6 +1,7 @@
 import { ZipArchive } from "archiver";
 import { prisma } from "@/lib/db";
 import { storage } from "@/lib/storage";
+import { assertUser } from "@/lib/auth/session";
 
 // Stream ZIP semua rendition DONE (plan.md §9). Nama file dalam ZIP pakai
 // handle akun + jobId supaya user gampang identify.
@@ -8,6 +9,8 @@ export const runtime = "nodejs";
 export const maxDuration = 60;
 
 export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> }) {
+  const gate = await assertUser();
+  if (gate) return gate;
   const { id } = await ctx.params;
   const job = await prisma.job.findUnique({
     where: { id },

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
+import { assertUser } from "@/lib/auth/session";
 
 export const runtime = "nodejs";
 
@@ -7,6 +8,8 @@ export async function GET(
   _req: Request,
   { params }: { params: Promise<{ taskId: string }> }
 ) {
+  const gate = await assertUser();
+  if (gate) return gate;
   const { taskId } = await params;
   const task = await prisma.thumbnailTask.findUnique({ where: { id: taskId } });
   if (!task) {

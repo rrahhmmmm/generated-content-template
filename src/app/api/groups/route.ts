@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
+import { assertUser } from "@/lib/auth/session";
 
 const createSchema = z.object({
   name: z.string().trim().min(1).max(80),
@@ -9,6 +10,8 @@ const createSchema = z.object({
 });
 
 export async function GET() {
+  const gate = await assertUser();
+  if (gate) return gate;
   const groups = await prisma.group.findMany({
     orderBy: { name: "asc" },
     include: {
@@ -30,6 +33,8 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
+  const gate = await assertUser();
+  if (gate) return gate;
   const body = await req.json().catch(() => null);
   const parsed = createSchema.safeParse(body);
   if (!parsed.success) {
