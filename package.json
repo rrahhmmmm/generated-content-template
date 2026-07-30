@@ -11,6 +11,7 @@
     "db:migrate": "node node_modules/prisma/build/index.js migrate dev",
     "db:push": "node node_modules/prisma/build/index.js db push",
     "db:studio": "node node_modules/prisma/build/index.js studio",
+    "db:seed": "tsx prisma/seed.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "render": "tsx scripts/render.ts",
@@ -66,5 +67,8 @@
     "tsx": "^4.23.1",
     "typescript": "^5",
     "vitest": "^4.1.10"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
   }
 }
