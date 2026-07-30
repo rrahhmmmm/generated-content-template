@@ -10,8 +10,24 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
+}
+
+// User untuk autentikasi. Bootstrap admin pertama via SQL insert manual
+// (lihat README §Auth). Register dari UI selalu buat user PENDING; admin
+// harus approve di /admin/users sebelum user bisa login.
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  role         String   @default("USER")    // "ADMIN" | "USER"
+  status       String   @default("PENDING") // "PENDING" | "ACTIVE" | "REJECTED"
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([status])
 }
 
 model Account {
@@ -25,7 +41,20 @@ model Account {
   promptStyle String?
   template    Template?
   renditions  Rendition[]
+  groups      Group[]     @relation("GroupAccounts")
   createdAt   DateTime    @default(now())
+}
+
+// Kumpulan Account untuk mempermudah pemilihan di /create.
+// Group adalah UI-level convenience; endpoint job/thumbnail tetap bekerja
+// dengan flat accountIds. Union group + akun manual di-resolve di server.
+model Group {
+  id          String    @id @default(cuid())
+  name        String    @unique
+  description String?
+  accounts    Account[] @relation("GroupAccounts")
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 }
 
 // Konfigurasi prompt LLM. Singleton — hanya satu row dengan id="global".
@@ -67,21 +96,38 @@ model Job {
 }
 
 model Rendition {
-  id           String    @id @default(cuid())
-  jobId        String
-  job          Job       @relation(fields: [jobId], references: [id], onDelete: Cascade)
-  accountId    String
-  account      Account   @relation(fields: [accountId], references: [id])
-  status       String    @default("PENDING")
-  caption      String?
-  thumbText    String?
-  outputKey    String?
-  thumbnailKey String?
-  errorMessage String?
-  attempts     Int       @default(0)
-  startedAt    DateTime?
-  finishedAt   DateTime?
+  id                    String    @id @default(cuid())
+  jobId                 String
+  job                   Job       @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  accountId             String
+  account               Account   @relation(fields: [accountId], references: [id])
+  status                String    @default("PENDING")
+  caption               String?
+  thumbText             String?
+  outputKey             String?
+  thumbnailKey          String?
+  thumbnailSource       String?   // "AUTO" | "MANUAL" — null = fallback (extract detik 2 dari output)
+  thumbnailTimestampSec Float?    // hanya diisi kalau source = AUTO
+  errorMessage          String?
+  attempts              Int       @default(0)
+  startedAt             DateTime?
+  finishedAt            DateTime?
 
   @@unique([jobId, accountId])
   @@index([jobId, status])
+}
+
+// Pre-job async task untuk generate N thumbnail unik dari 1 video source.
+// State disimpan di sini supaya UI bisa poll progress; worker (queue existing)
+// yang eksekusi. Field JSON di-string karena SQLite; parse di consumer.
+model ThumbnailTask {
+  id        String   @id @default(cuid())
+  sourceKey String
+  status    String   @default("QUEUED") // QUEUED | RUNNING | DONE | FAILED
+  progress  String   @default("{}")     // JSON: { done: number, total: number }
+  items     String   @default("[]")     // JSON: GeneratedThumb[]
+  warnings  String   @default("[]")     // JSON: string[]
+  error     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }

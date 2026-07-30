@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { PLATFORMS } from "@/lib/platforms";
+import { assertUser } from "@/lib/auth/session";
 
 const createSchema = z.object({
   handle: z
@@ -15,6 +16,8 @@ const createSchema = z.object({
 });
 
 export async function GET() {
+  const gate = await assertUser();
+  if (gate) return gate;
   const accounts = await prisma.account.findMany({
     orderBy: { createdAt: "desc" },
     include: { template: { select: { id: true, version: true, updatedAt: true } } },
@@ -23,6 +26,8 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
+  const gate = await assertUser();
+  if (gate) return gate;
   const body = await req.json().catch(() => null);
   const parsed = createSchema.safeParse(body);
   if (!parsed.success) {

@@ -5,6 +5,8 @@ import ffmpegStatic from "ffmpeg-static";
 import { prisma } from "@/lib/db";
 import { storage } from "@/lib/storage";
 import { render } from "@/lib/render";
+import { embedCoverFrame } from "@/lib/render/embed-cover";
+import { compositeThumbnail } from "@/lib/render/composite-thumbnail";
 import type { TemplateLayout } from "@/types/template-layout";
 
 const FFMPEG_BIN = process.env.FFMPEG_PATH || (ffmpegStatic as unknown as string) || "ffmpeg";
@@ -84,22 +86,92 @@ export async function processRendition(renditionId: string): Promise<void> {
       workDir,
     });
 
-    // 3. Extract thumbnail (JPG) — dari detik 2 supaya kartu terlihat
-    await extractThumbnail(outputPath, thumbnailPath, 2);
+    // 3. Materialize raw thumbnail ke local file.
+    //    Pre-job (Fase 5): download dari storage (background frame unik per akun).
+    //    Fallback: extract dari detik 2 output video (sudah ada overlay — tapi kita
+    //    tetap composite lagi supaya path kode uniform; hasil composite akan sedikit
+    //    "double overlay" tapi hanya edge case saat user skip pre-job).
+    const hasPreJobThumbnail = rendition.thumbnailKey !== null;
+    const rawThumbPath = path.join(workDir, "raw-thumb.jpg");
+    if (hasPreJobThumbnail) {
+      const preObj = await storage().get(rendition.thumbnailKey!);
+      if (preObj) await fs.writeFile(rawThumbPath, preObj.buffer);
+    } else {
+      // Fallback: extract dari SUMBER (bukan output) di detik 2 — biar composite
+      // apply overlay clean tanpa double-overlay.
+      await extractThumbnail(sourcePath, rawThumbPath, 2);
+    }
 
-    // 4. Upload output + thumbnail ke storage
+    // 3.5. Composite thumbnail: apply frame overlay + intro card + text ke raw thumb.
+    //      Hasilnya = single-frame image dengan branding sama seperti detik 0-5 video.
+    //      Dipakai (a) sebagai final thumbnailKey (di DB & download bundle) dan
+    //      (b) sebagai cover frame yang di-embed ke video output.
+    const compositePath = path.join(workDir, "composite-thumb.jpg");
+    let coverPath: string | null = null;
+    try {
+      await fs.access(rawThumbPath);
+      await compositeThumbnail({
+        backgroundJpg: rawThumbPath,
+        framePath,
+        introPath,
+        fontPath,
+        layout,
+        thumbText: rendition.thumbText,
+        outputJpg: compositePath,
+        workDir,
+      });
+      coverPath = compositePath;
+    } catch (err) {
+      console.warn(
+        `[render] Composite thumbnail gagal untuk ${renditionId}: ${(err as Error).message}. ` +
+          `Fallback pakai raw thumbnail.`
+      );
+      // Kalau composite fail, pakai raw (kalau ada) atau skip cover embed
+      try {
+        await fs.access(rawThumbPath);
+        coverPath = rawThumbPath;
+      } catch {
+        coverPath = null;
+      }
+    }
+
+    // 3.6. Embed cover frame (Fase 6): prepend composite thumbnail sebagai frame
+    //      0-Xms supaya Instagram auto-pick sebagai cover di Reels/Feed.
+    //      Toggle: EMBED_COVER_FRAME=false untuk disable, COVER_FRAME_DURATION_SEC
+    //      untuk tuning durasi flash (default 0.15s).
+    const embedEnabled = process.env.EMBED_COVER_FRAME !== "false";
+    const coverSec = parseFloat(process.env.COVER_FRAME_DURATION_SEC || "0.15");
+    let videoForUpload = outputPath;
+    if (embedEnabled && coverPath) {
+      try {
+        const withCoverPath = path.join(workDir, "out-with-cover.mp4");
+        await embedCoverFrame(coverPath, outputPath, withCoverPath, { coverSec });
+        videoForUpload = withCoverPath;
+      } catch (err) {
+        console.warn(
+          `[render] Embed cover gagal untuk ${renditionId}, pakai video asli: ${
+            (err as Error).message
+          }`
+        );
+      }
+    }
+
+    // 4. Upload video (with cover kalau enabled) + thumbnail final (composite kalau ada).
     const outKey = `renditions/${rendition.jobId}/${renditionId}/output.mp4`;
-    const thumbKey = `renditions/${rendition.jobId}/${renditionId}/thumb.jpg`;
+    const thumbKeyFinal = `renditions/${rendition.jobId}/${renditionId}/thumb.jpg`;
+    const outBuf = await fs.readFile(videoForUpload);
+    await storage().put(outKey, outBuf, "video/mp4");
 
-    const [outBuf, thumbBuf] = await Promise.all([
-      fs.readFile(outputPath),
-      fs.readFile(thumbnailPath),
-    ]);
-
-    await Promise.all([
-      storage().put(outKey, outBuf, "video/mp4"),
-      storage().put(thumbKey, thumbBuf, "image/jpeg"),
-    ]);
+    // Thumbnail: prioritas composite → raw → tetap null (rare edge case).
+    const thumbForUploadPath = coverPath ?? (hasPreJobThumbnail ? rawThumbPath : thumbnailPath);
+    try {
+      const thumbBuf = await fs.readFile(thumbForUploadPath);
+      await storage().put(thumbKeyFinal, thumbBuf, "image/jpeg");
+    } catch (err) {
+      console.warn(
+        `[render] Upload thumbnail gagal untuk ${renditionId}: ${(err as Error).message}`
+      );
+    }
 
     // 5. Update rendition + rekalkulasi status job
     await prisma.rendition.update({
@@ -107,7 +179,7 @@ export async function processRendition(renditionId: string): Promise<void> {
       data: {
         status: "DONE",
         outputKey: outKey,
-        thumbnailKey: thumbKey,
+        thumbnailKey: thumbKeyFinal,
         finishedAt: new Date(),
         errorMessage: result.truncated
           ? "Teks thumbnail dipotong karena melampaui ukuran minimum"

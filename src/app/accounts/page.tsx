@@ -7,10 +7,12 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/empty-state";
 import { AddAccountDialog } from "./add-account-dialog";
+import { requireUserPage } from "@/lib/auth/session";
 
 export const dynamic = "force-dynamic";
 
 export default async function AccountsPage() {
+  await requireUserPage("/accounts");
   const accounts = await prisma.account.findMany({
     orderBy: { createdAt: "desc" },
     include: { template: { select: { version: true, updatedAt: true } } },

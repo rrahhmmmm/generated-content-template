@@ -1,6 +1,7 @@
 import { ZipArchive } from "archiver";
 import { prisma } from "@/lib/db";
 import { storage } from "@/lib/storage";
+import { assertUser } from "@/lib/auth/session";
 
 // Stream ZIP semua rendition DONE (plan.md §9). Nama file dalam ZIP pakai
 // handle akun + jobId supaya user gampang identify.
@@ -8,6 +9,8 @@ export const runtime = "nodejs";
 export const maxDuration = 60;
 
 export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> }) {
+  const gate = await assertUser();
+  if (gate) return gate;
   const { id } = await ctx.params;
   const job = await prisma.job.findUnique({
     where: { id },
@@ -42,6 +45,15 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
           if (!obj) continue;
           const handle = r.account.handle.replace(/[^a-z0-9._-]+/gi, "_");
           archive.append(obj.buffer, { name: `${handle}.mp4` });
+
+          // Thumbnail per akun (Fase 5: sudah unik per akun kalau di-generate pre-job)
+          if (r.thumbnailKey) {
+            const thumb = await s.get(r.thumbnailKey);
+            if (thumb) {
+              archive.append(thumb.buffer, { name: `${handle}_thumb.jpg` });
+            }
+          }
+
           captionLines.push(`=== ${r.account.handle} ===`);
           captionLines.push(`Thumbnail: ${r.thumbText ?? ""}`);
           captionLines.push(`Caption:`);

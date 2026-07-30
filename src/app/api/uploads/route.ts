@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { storage } from "@/lib/storage";
+import { assertUser } from "@/lib/auth/session";
 
 const MAX_BYTES = 20 * 1024 * 1024; // 20 MB — cukup untuk PNG template
 
@@ -11,6 +12,8 @@ const querySchema = z.object({
 });
 
 export async function POST(req: Request) {
+  const gate = await assertUser();
+  if (gate) return gate;
   const url = new URL(req.url);
   const parsed = querySchema.safeParse({ prefix: url.searchParams.get("prefix") ?? "misc" });
   if (!parsed.success) {

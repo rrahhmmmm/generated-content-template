@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { storage } from "@/lib/storage";
 import { JobDetail } from "./job-detail";
+import { requireUserPage } from "@/lib/auth/session";
 
 export const dynamic = "force-dynamic";
 
@@ -11,6 +12,7 @@ export default async function JobDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
+  await requireUserPage(`/jobs/${id}`);
   const job = await prisma.job.findUnique({
     where: { id },
     include: {

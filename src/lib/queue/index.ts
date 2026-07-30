@@ -7,12 +7,15 @@
 // - "job-prep": panggil LLM batch untuk satu Job, isi caption/thumbText per
 //   rendition, lalu enqueue 10 tasks "render-rendition".
 // - "render-rendition": render satu rendition, upload output+thumbnail ke storage.
+// - "thumbnail-generation" (§Fase 5): pre-job generate N thumbnail unik dari
+//   video source, dedup perseptual, tulis hasil ke ThumbnailTask.items.
 
-export type TaskType = "job-prep" | "render-rendition";
+export type TaskType = "job-prep" | "render-rendition" | "thumbnail-generation";
 
 export type TaskPayloads = {
   "job-prep": { jobId: string };
   "render-rendition": { renditionId: string };
+  "thumbnail-generation": { taskId: string };
 };
 
 export type TaskHandler<T extends TaskType = TaskType> = (

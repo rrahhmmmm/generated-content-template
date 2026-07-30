@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/empty-state";
+import { requireUserPage } from "@/lib/auth/session";
 
 export const dynamic = "force-dynamic";
 
@@ -18,6 +19,7 @@ const JOB_STATUS_MAP: Record<string, { tone: "muted" | "accent" | "success" | "w
 };
 
 export default async function JobsPage() {
+  await requireUserPage("/jobs");
   const jobs = await prisma.job.findMany({
     orderBy: { createdAt: "desc" },
     take: 50,

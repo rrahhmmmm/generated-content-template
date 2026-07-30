@@ -1,8 +1,11 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { queue, ensureHandlersRegistered } from "@/lib/queue";
+import { assertUser } from "@/lib/auth/session";
 
 export async function POST(_req: Request, ctx: { params: Promise<{ id: string }> }) {
+  const gate = await assertUser();
+  if (gate) return gate;
   const { id } = await ctx.params;
   const rendition = await prisma.rendition.findUnique({ where: { id } });
   if (!rendition) return NextResponse.json({ error: "Not found" }, { status: 404 });
