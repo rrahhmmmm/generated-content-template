@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import ffmpegStatic from "ffmpeg-static";
+import ffprobeStatic from "ffprobe-static";
 import type { TemplateLayout } from "@/types/template-layout";
 import { loadFont } from "@/lib/fonts";
 import { buildFilterComplex, computeIntroFit } from "./filter";
@@ -114,7 +115,9 @@ function runFfmpeg(args: string[]): Promise<void> {
   });
 }
 
-const FFPROBE_BIN = process.env.FFPROBE_PATH || "ffprobe";
+// ffmpeg-static hanya membundel ffmpeg; ffprobe harus dari paket terpisah.
+// Tanpa ini FFPROBE_BIN jatuh ke PATH host → ENOENT di container Railway.
+const FFPROBE_BIN = process.env.FFPROBE_PATH || ffprobeStatic.path || "ffprobe";
 
 export async function probeDuration(sourcePath: string): Promise<number | null> {
   return new Promise((resolve, reject) => {

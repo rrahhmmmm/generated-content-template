@@ -9,6 +9,7 @@ const nextConfig: NextConfig = {
   // di-rewrite dan resolusi path binary rusak (mis. ffmpeg-static → /ROOT/...).
   serverExternalPackages: [
     "ffmpeg-static",
+    "ffprobe-static",
     "opentype.js",
     "bullmq",
     "ioredis",
