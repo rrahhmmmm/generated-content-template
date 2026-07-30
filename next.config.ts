@@ -17,6 +17,11 @@ const nextConfig: NextConfig = {
     "@aws-sdk/client-s3",
     "@aws-sdk/s3-request-presigner",
   ],
+  experimental: {
+    // Middleware memaksa Next.js mem-buffer request body; default 10MB memotong
+    // body diam-diam dan menyebabkan formData() gagal parse pada upload video.
+    proxyClientMaxBodySize: "250mb",
+  },
 };
 
 export default nextConfig;
