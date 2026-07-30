@@ -7,6 +7,7 @@ import { PLATFORM_LABEL, type Platform } from "@/lib/platforms";
 import { Button } from "@/components/ui/button";
 import { TemplateEditor } from "./template-editor";
 import { requireUserPage } from "@/lib/auth/session";
+import { storage } from "@/lib/storage";
 
 export const dynamic = "force-dynamic";
 
@@ -64,6 +65,8 @@ export default async function TemplatePage({
         initialLayout={initialLayout}
         initialFrameKey={frameKey}
         initialIntroKey={introKey}
+        initialFrameUrl={frameKey ? storage().getPublicUrl(frameKey) : null}
+        initialIntroUrl={introKey ? storage().getPublicUrl(introKey) : null}
       />
     </div>
   );

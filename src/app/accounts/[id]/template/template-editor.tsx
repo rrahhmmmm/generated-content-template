@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -14,35 +14,33 @@ const SHORT_TEXT = "Halo dunia";
 const LONG_TEXT =
   "Sebelumnya apresiasi Polri penangkapan Jampidsus oleh Densus 88 anti teror di Jakarta selatan hari ini pukul 08 pagi WIB";
 
-function publicUrlFor(key: string | null): string | null {
-  if (!key) return null;
-  return `/api/uploads/local/${key.replace(/^\/+/, "")}`;
-}
-
 export function TemplateEditor({
   accountId,
   initialLayout,
   initialFrameKey,
   initialIntroKey,
+  initialFrameUrl,
+  initialIntroUrl,
 }: {
   accountId: string;
   initialLayout: TemplateLayout;
   initialFrameKey: string | null;
   initialIntroKey: string | null;
+  initialFrameUrl: string | null;
+  initialIntroUrl: string | null;
 }) {
   const router = useRouter();
   const [layout, setLayout] = useState<TemplateLayout>(initialLayout);
   const [frameKey, setFrameKey] = useState<string | null>(initialFrameKey);
   const [introKey, setIntroKey] = useState<string | null>(initialIntroKey);
+  const [frameUrl, setFrameUrl] = useState<string | null>(initialFrameUrl);
+  const [introUrl, setIntroUrl] = useState<string | null>(initialIntroUrl);
   const [sampleText, setSampleText] = useState(LONG_TEXT);
   const [customText, setCustomText] = useState(LONG_TEXT);
   const [showIntro, setShowIntro] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
-
-  const frameUrl = useMemo(() => publicUrlFor(frameKey), [frameKey]);
-  const introUrl = useMemo(() => publicUrlFor(introKey), [introKey]);
 
   const canSave = Boolean(frameKey && layout.frame.overlayKey && (!layout.intro || (introKey && layout.intro.overlayKey)));
 
@@ -102,11 +100,13 @@ export function TemplateEditor({
               onUpload={async (file) => {
                 const up = await uploadImage(file, `templates/${accountId}/frame`);
                 setFrameKey(up.key);
+                setFrameUrl(up.url);
                 setLayout((L) => ({ ...L, frame: { overlayKey: up.key } }));
                 return up;
               }}
               onClear={() => {
                 setFrameKey(null);
+                setFrameUrl(null);
                 setLayout((L) => ({ ...L, frame: { overlayKey: "" } }));
               }}
             />
@@ -121,6 +121,7 @@ export function TemplateEditor({
               onUpload={async (file) => {
                 const up = await uploadImage(file, `templates/${accountId}/intro`);
                 setIntroKey(up.key);
+                setIntroUrl(up.url);
                 setLayout((L) => {
                   const base: IntroCard =
                     L.intro ?? initialLayout.intro ?? (DEFAULT_LAYOUT.intro as IntroCard);
@@ -130,6 +131,7 @@ export function TemplateEditor({
               }}
               onClear={() => {
                 setIntroKey(null);
+                setIntroUrl(null);
                 setLayout((L) => ({ ...L, intro: null }));
               }}
             />
