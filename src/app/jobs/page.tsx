@@ -114,7 +114,9 @@ export default async function JobsPage() {
                     </Td>
                     <Td className="max-w-md">
                       <Link href={`/jobs/${j.id}`} className="block">
-                        <p className="line-clamp-2 text-body text-text">{j.baseCaption}</p>
+                        <p className="line-clamp-2 text-body text-text">
+                          {j.description ?? j.baseCaption ?? "(tanpa input teks)"}
+                        </p>
                         <p className="mt-1 text-caption text-text-muted">
                           #{j.id.slice(-6)}
                         </p>

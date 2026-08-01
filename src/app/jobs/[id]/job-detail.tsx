@@ -14,8 +14,9 @@ import { PLATFORM_LABEL, type Platform } from "@/lib/platforms";
 type JobData = {
   id: string;
   status: string;
-  baseCaption: string;
-  baseThumbText: string;
+  description: string | null;
+  baseCaption: string | null;
+  baseThumbText: string | null;
   createdAt: string;
   completedAt: string | null;
   summary: {
@@ -160,14 +161,24 @@ export function JobDetail({ initial }: { initial: JobData }) {
       <Card>
         <CardContent className="grid gap-3 py-4">
           <p className="text-label text-text-muted">Input asli</p>
-          <div className="grid gap-1">
-            <p className="text-caption text-text-muted">Caption</p>
-            <p className="text-body text-text">{job.baseCaption}</p>
-          </div>
-          <div className="grid gap-1">
-            <p className="text-caption text-text-muted">Thumbnail</p>
-            <p className="text-body text-text">{job.baseThumbText}</p>
-          </div>
+          {job.description ? (
+            <div className="grid gap-1">
+              <p className="text-caption text-text-muted">Deskripsi video</p>
+              <p className="whitespace-pre-wrap text-body text-text">{job.description}</p>
+            </div>
+          ) : null}
+          {job.baseCaption ? (
+            <div className="grid gap-1">
+              <p className="text-caption text-text-muted">Caption</p>
+              <p className="text-body text-text">{job.baseCaption}</p>
+            </div>
+          ) : null}
+          {job.baseThumbText ? (
+            <div className="grid gap-1">
+              <p className="text-caption text-text-muted">Thumbnail</p>
+              <p className="text-body text-text">{job.baseThumbText}</p>
+            </div>
+          ) : null}
         </CardContent>
       </Card>
     </div>

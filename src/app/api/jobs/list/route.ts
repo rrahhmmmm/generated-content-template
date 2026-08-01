@@ -34,6 +34,7 @@ export async function GET() {
       return {
         id: j.id,
         status: j.status,
+        description: j.description,
         baseCaption: j.baseCaption,
         baseThumbText: j.baseThumbText,
         createdAt: j.createdAt,

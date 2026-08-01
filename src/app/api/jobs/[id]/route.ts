@@ -46,6 +46,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
   return NextResponse.json({
     id: job.id,
     status: job.status,
+    description: job.description,
     baseCaption: job.baseCaption,
     baseThumbText: job.baseThumbText,
     sourceKey: job.sourceKey,

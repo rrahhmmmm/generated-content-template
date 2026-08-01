@@ -1,13 +1,23 @@
 import type { RewriteBatchInput, RewriteBatchItem } from "./index";
+import { MAX_THUMB_WORDS } from "./index";
 
-// Validasi output LLM + fallback per-akun. Aturan plan.md §6:
-// - Tiap accountId di input harus ada di output; kalau kurang → fallback teks asli
-// - thumbText.length <= maxChars (kalau lebih → truncate di batas kata)
-// - thumbText tidak boleh kosong
-// Kalau validasi satu akun gagal, pakai teks asli untuk akun itu, JANGAN gagalkan
-// seluruh job.
+// Validasi output LLM. Return shape per akun: { ok: true, ... } atau { ok: false, reason }.
+// Behavior fallback per mode ditangani di worker (process-job.ts):
+// - mode "generate": tidak ada teks user → invalid → rendition FAILED.
+// - mode "rewrite":  ada baseCaption/baseThumbText → fallback ke situ (fellBack: true),
+//                    tapi thumbText tetap ditruncate ke MAX_THUMB_WORDS kata.
 
 type RawResult = { accountId?: unknown; caption?: unknown; thumbText?: unknown };
+
+export function countWords(s: string): number {
+  return s.trim().split(/\s+/).filter(Boolean).length;
+}
+
+export function truncateWords(s: string, maxWords: number): string {
+  const words = s.trim().split(/\s+/).filter(Boolean);
+  if (words.length <= maxWords) return words.join(" ");
+  return words.slice(0, maxWords).join(" ");
+}
 
 export function validateAndFallback(
   input: RewriteBatchInput,
@@ -22,40 +32,56 @@ export function validateAndFallback(
   for (const acc of input.accounts) {
     const raw = byId.get(acc.accountId);
 
-    let caption = input.baseCaption;
-    let thumb = input.baseThumbText;
-    let fellBack = true;
-
+    // Try LLM output first
     if (raw && typeof raw.caption === "string" && typeof raw.thumbText === "string") {
       const c = raw.caption.trim();
       let t = raw.thumbText.trim();
 
-      // Truncate thumb di batas kata kalau over
-      if (t.length > acc.maxThumbChars) {
-        t = truncateAtWord(t, acc.maxThumbChars);
+      if (c.length === 0 || t.length === 0) {
+        items.push(fallbackOrFail(input, acc.accountId, "caption/thumbText kosong dari LLM"));
+        continue;
       }
 
-      if (c.length > 0 && t.length > 0) {
-        caption = c;
-        thumb = t;
-        fellBack = false;
+      // Enforce 90-word cap. Untuk "rewrite" mode truncate saja; untuk "generate"
+      // truncate juga (LLM diminta ≤90; kalau sedikit over, potong daripada FAILED).
+      if (countWords(t) > MAX_THUMB_WORDS) {
+        t = truncateWords(t, MAX_THUMB_WORDS);
       }
+
+      items.push({
+        ok: true,
+        accountId: acc.accountId,
+        caption: c,
+        thumbText: t,
+        fellBack: false,
+      });
+      continue;
     }
 
-    // Bahkan kalau LLM sukses, teks asli tetap disingkatkan agar tidak overflow.
-    if (fellBack && thumb.length > acc.maxThumbChars) {
-      thumb = truncateAtWord(thumb, acc.maxThumbChars);
-    }
-
-    items.push({ accountId: acc.accountId, caption, thumbText: thumb, fellBack });
+    // Tidak ada hasil LLM untuk akun ini → fallback (rewrite) atau fail (generate)
+    items.push(fallbackOrFail(input, acc.accountId, "tidak ada hasil LLM untuk accountId ini"));
   }
   return items;
 }
 
-function truncateAtWord(s: string, maxLen: number): string {
-  if (s.length <= maxLen) return s;
-  const cut = s.slice(0, maxLen);
-  const lastSpace = cut.lastIndexOf(" ");
-  if (lastSpace > maxLen * 0.6) return cut.slice(0, lastSpace).trim();
-  return cut.trim();
+function fallbackOrFail(
+  input: RewriteBatchInput,
+  accountId: string,
+  reason: string
+): RewriteBatchItem {
+  if (input.mode === "rewrite") {
+    const caption = input.baseCaption;
+    let thumb = input.baseThumbText;
+    if (countWords(thumb) > MAX_THUMB_WORDS) {
+      thumb = truncateWords(thumb, MAX_THUMB_WORDS);
+    }
+    return {
+      ok: true,
+      accountId,
+      caption,
+      thumbText: thumb,
+      fellBack: true,
+    };
+  }
+  return { ok: false, accountId, reason };
 }

@@ -16,8 +16,10 @@ const bodySchema = z
   .object({
     sourceKey: z.string().min(1),
     sourceDuration: z.number().optional(),
-    baseCaption: z.string().trim().min(1).max(5000),
-    baseThumbText: z.string().trim().min(1).max(200),
+    // Dua mode input (XOR): description saja, atau baseCaption + baseThumbText.
+    description: z.string().trim().min(20).max(5000).optional(),
+    baseCaption: z.string().trim().min(1).max(5000).optional(),
+    baseThumbText: z.string().trim().min(1).max(500).optional(),
     groupIds: z.array(z.string()).default([]),
     accountIds: z.array(z.string()).default([]),
     thumbnails: z.array(thumbnailInputSchema).optional(),
@@ -25,6 +27,32 @@ const bodySchema = z
   .refine((d) => d.groupIds.length > 0 || d.accountIds.length > 0, {
     message: "Minimal satu group atau satu akun harus dipilih",
     path: ["accountIds"],
+  })
+  .superRefine((v, ctx) => {
+    const hasDesc = !!v.description;
+    const hasPair = !!v.baseCaption && !!v.baseThumbText;
+    if (hasDesc && hasPair) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Isi salah satu saja: description ATAU (baseCaption + baseThumbText).",
+        path: ["description"],
+      });
+    }
+    if (!hasDesc && !hasPair) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Wajib mengisi description (min 20 karakter) ATAU baseCaption + baseThumbText.",
+        path: ["description"],
+      });
+    }
+    // Kasus setengah-setengah: baseCaption tanpa baseThumbText (atau sebaliknya).
+    if (!hasDesc && ((v.baseCaption && !v.baseThumbText) || (!v.baseCaption && v.baseThumbText))) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "baseCaption dan baseThumbText harus diisi berpasangan.",
+        path: ["baseThumbText"],
+      });
+    }
   });
 
 type Excluded = {
@@ -127,8 +155,9 @@ export async function POST(req: Request) {
         data: {
           sourceKey: parsed.data.sourceKey,
           sourceDuration: parsed.data.sourceDuration ?? null,
-          baseCaption: parsed.data.baseCaption,
-          baseThumbText: parsed.data.baseThumbText,
+          description: parsed.data.description ?? null,
+          baseCaption: parsed.data.baseCaption ?? null,
+          baseThumbText: parsed.data.baseThumbText ?? null,
           status: "QUEUED",
         },
       });

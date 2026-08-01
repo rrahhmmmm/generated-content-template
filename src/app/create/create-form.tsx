@@ -11,8 +11,13 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
-import { PLATFORM_LABEL, PLATFORM_THUMB_MAX, type Platform } from "@/lib/platforms";
+import { PLATFORM_LABEL, type Platform } from "@/lib/platforms";
 import { ThumbnailPreview, type ThumbnailEntry } from "./thumbnail-preview";
+
+const MAX_THUMB_WORDS = 90;
+const DESCRIPTION_MIN_CHARS = 20;
+
+type InputMode = "description" | "manual";
 
 type AccountRow = {
   id: string;
@@ -50,6 +55,8 @@ export function CreateForm({
 
   const [file, setFile] = useState<File | null>(null);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [mode, setMode] = useState<InputMode>("description");
+  const [description, setDescription] = useState("");
   const [caption, setCaption] = useState("");
   const [thumbText, setThumbText] = useState("");
   const [sourceKey, setSourceKey] = useState<string | null>(null);
@@ -99,23 +106,22 @@ export function CreateForm({
     return () => URL.revokeObjectURL(url);
   }, [file]);
 
-  const minMaxChars = useMemo(() => {
-    // Batas terkecil di antara akun terpilih (union group + manual) — kalau ada
-    // TikTok 80 & YouTube 100 dan user pilih dua-duanya, tampilkan hint 80.
-    let min = Infinity;
-    for (const a of accounts) {
-      if (!resolvedAccountIds.has(a.id)) continue;
-      const m = PLATFORM_THUMB_MAX[a.platform as Platform] ?? 80;
-      if (m < min) min = m;
-    }
-    return Number.isFinite(min) ? min : 80;
-  }, [accounts, resolvedAccountIds]);
+  const thumbWordCount = useMemo(
+    () => (thumbText.trim() ? thumbText.trim().split(/\s+/).length : 0),
+    [thumbText]
+  );
+
+  const inputValid =
+    mode === "description"
+      ? description.trim().length >= DESCRIPTION_MIN_CHARS
+      : caption.trim().length > 0 &&
+        thumbText.trim().length > 0 &&
+        thumbWordCount <= MAX_THUMB_WORDS;
 
   const canSubmit =
     file !== null &&
     sourceKey !== null &&
-    caption.trim().length > 0 &&
-    thumbText.trim().length > 0 &&
+    inputValid &&
     resolvedAccountIds.size > 0 &&
     !uploading &&
     submitResult === null;
@@ -196,14 +202,18 @@ export function CreateForm({
         })
         .filter((x): x is NonNullable<typeof x> => x !== null);
 
+      const inputPayload =
+        mode === "description"
+          ? { description: description.trim() }
+          : { baseCaption: caption.trim(), baseThumbText: thumbText.trim() };
+
       const res = await fetch("/api/jobs", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           sourceKey,
           sourceDuration,
-          baseCaption: caption.trim(),
-          baseThumbText: thumbText.trim(),
+          ...inputPayload,
           // Kirim raw selection — server yang resolve union + dedup.
           groupIds: [...selectedGroups],
           accountIds: [...selected],
@@ -313,53 +323,105 @@ export function CreateForm({
         </CardContent>
       </Card>
 
-      {/* Step 2: Caption & Thumb */}
+      {/* Step 2: Input teks (mode: description atau manual) */}
       <Card>
         <CardHeader>
-          <CardTitle>2. Caption & teks thumbnail</CardTitle>
+          <CardTitle>2. Teks konten</CardTitle>
           <CardDescription>
-            Versi asli — LLM akan menulis ulang per akun sesuai gaya platform dan override yang di-set di Pengaturan.
+            Pilih salah satu: deskripsikan video secara komprehensif dan biarkan sistem yang menulis caption + thumbnail per akun (mengikuti systemPrompt + accountPrompt), atau tulis sendiri caption + teks thumbnail yang nanti di-rewrite LLM per akun.
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
-          <div className="grid gap-1.5">
-            <div className="flex items-baseline justify-between">
-              <Label htmlFor="caption">Caption</Label>
-              <span className="text-caption text-text-muted">{caption.length} karakter</span>
-            </div>
-            <Textarea
-              id="caption"
-              className="min-h-32"
-              value={caption}
-              onChange={(e) => setCaption(e.target.value)}
-              placeholder="Contoh: Video baru masternya jenis cendet, harga 500 ribu, cocok untuk pemula. Follow untuk update harian!"
-            />
+          <div className="inline-flex w-fit rounded-md border border-border p-0.5">
+            <button
+              type="button"
+              onClick={() => setMode("description")}
+              className={cn(
+                "rounded px-3 py-1.5 text-caption",
+                mode === "description" ? "bg-accent text-white" : "text-text-muted hover:text-text"
+              )}
+            >
+              Deskripsi (auto-generate)
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode("manual")}
+              className={cn(
+                "rounded px-3 py-1.5 text-caption",
+                mode === "manual" ? "bg-accent text-white" : "text-text-muted hover:text-text"
+              )}
+            >
+              Caption + thumbnail manual
+            </button>
           </div>
-          <div className="grid gap-1.5">
-            <div className="flex items-baseline justify-between">
-              <Label htmlFor="thumb">Teks thumbnail</Label>
-              <span
-                className={cn(
-                  "text-caption",
-                  thumbText.length > minMaxChars ? "text-warning" : "text-text-muted"
-                )}
-              >
-                {thumbText.length} / {minMaxChars} karakter
-              </span>
-            </div>
-            <Input
-              id="thumb"
-              value={thumbText}
-              onChange={(e) => setThumbText(e.target.value)}
-              placeholder="Contoh: CENDET BAKALAN GACOR HARGA 500 RIBU"
-              maxLength={200}
-            />
-            {thumbText.length > minMaxChars ? (
-              <p className="text-caption text-warning">
-                Melewati batas akun terpendek — LLM akan memotong sesuai maxChars per akun.
+
+          {mode === "description" ? (
+            <div className="grid gap-1.5">
+              <div className="flex items-baseline justify-between">
+                <Label htmlFor="description">Deskripsi video (komprehensif)</Label>
+                <span
+                  className={cn(
+                    "text-caption",
+                    description.trim().length < DESCRIPTION_MIN_CHARS
+                      ? "text-text-muted"
+                      : "text-text-muted"
+                  )}
+                >
+                  {description.length} karakter
+                </span>
+              </div>
+              <Textarea
+                id="description"
+                className="min-h-40"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="Jelaskan lengkap: topik utama, poin-poin penting, tone yang diinginkan, target audiens, CTA/ajakan, angka atau nama produk yang harus muncul, dll. LLM akan generate caption + thumbnail text per akun berdasarkan deskripsi ini + systemPrompt + accountPrompt."
+              />
+              <p className="text-caption text-text-muted">
+                Minimum {DESCRIPTION_MIN_CHARS} karakter. Thumbnail text akan otomatis dibatasi ≤{MAX_THUMB_WORDS} kata.
               </p>
-            ) : null}
-          </div>
+            </div>
+          ) : (
+            <>
+              <div className="grid gap-1.5">
+                <div className="flex items-baseline justify-between">
+                  <Label htmlFor="caption">Caption</Label>
+                  <span className="text-caption text-text-muted">{caption.length} karakter</span>
+                </div>
+                <Textarea
+                  id="caption"
+                  className="min-h-32"
+                  value={caption}
+                  onChange={(e) => setCaption(e.target.value)}
+                  placeholder="Contoh: Video baru masternya jenis cendet, harga 500 ribu, cocok untuk pemula. Follow untuk update harian!"
+                />
+              </div>
+              <div className="grid gap-1.5">
+                <div className="flex items-baseline justify-between">
+                  <Label htmlFor="thumb">Teks thumbnail</Label>
+                  <span
+                    className={cn(
+                      "text-caption",
+                      thumbWordCount > MAX_THUMB_WORDS ? "text-danger" : "text-text-muted"
+                    )}
+                  >
+                    {thumbWordCount} / {MAX_THUMB_WORDS} kata
+                  </span>
+                </div>
+                <Input
+                  id="thumb"
+                  value={thumbText}
+                  onChange={(e) => setThumbText(e.target.value)}
+                  placeholder="Contoh: CENDET BAKALAN GACOR HARGA 500 RIBU"
+                />
+                {thumbWordCount > MAX_THUMB_WORDS ? (
+                  <p className="text-caption text-danger">
+                    Thumbnail text melebihi {MAX_THUMB_WORDS} kata. Persingkat sebelum submit.
+                  </p>
+                ) : null}
+              </div>
+            </>
+          )}
         </CardContent>
       </Card>
 
@@ -536,7 +598,7 @@ export function CreateForm({
         ) : (
           <span className="text-caption text-text-muted">
             {!file
-              ? "Upload video dulu, lalu isi caption + thumbnail."
+              ? "Upload video dulu, lalu isi deskripsi (atau caption + thumbnail manual)."
               : missingThumbCount > 0 && thumbnails.size > 0
                 ? `Siap dikirim. ${missingThumbCount} akun akan pakai thumbnail default (frame detik 2 dari video hasil).`
                 : missingThumbCount > 0

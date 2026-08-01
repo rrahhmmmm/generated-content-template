@@ -13,16 +13,19 @@ export type PromptConfig = {
 };
 
 export const DEFAULT_SYSTEM_PROMPT = [
-  "Kamu menulis ulang caption dan teks thumbnail untuk beberapa akun sosial media",
-  "yang memposting konten sama. Inti pesan, fakta, angka, nama produk, dan call-to-action",
-  "harus identik dengan versi asli. Yang berubah hanya susunan kalimat, pilihan kata,",
-  "dan pembuka — supaya platform tidak mendeteksi konten duplikat.",
+  "Kamu membuat caption dan teks thumbnail untuk beberapa akun sosial media",
+  "yang memposting konten yang sama. Ada dua mode tugas — instruksi tepatnya",
+  "ada di user prompt:",
+  "  (1) GENERATE: user memberikan deskripsi video → susun caption + thumbText dari nol",
+  "      untuk tiap akun, mengikuti systemPrompt + gaya platform + gaya per-akun.",
+  "  (2) REWRITE: user memberikan caption + thumbText asli → tulis ulang per akun",
+  "      dengan menjaga inti pesan, fakta, angka, nama produk, dan call-to-action.",
   "",
-  "Aturan:",
-  "- Jangan menambah klaim, angka, atau janji yang tidak ada di teks asli",
-  "- Jangan menghapus informasi dari teks asli",
-  "- Teks thumbnail maksimal sesuai maxChars per akun, tanpa emoji",
-  "- Caption boleh pakai emoji dan hashtag kalau versi asli punya",
+  "Aturan umum:",
+  "- Setiap akun harus dapat versi berbeda supaya platform tidak menganggap duplikat",
+  "- Jangan menambah klaim, angka, atau janji yang tidak didukung deskripsi/teks asli",
+  "- Teks thumbnail maksimum 90 kata, tanpa emoji, singkat dan tajam",
+  "- Caption boleh pakai emoji dan hashtag sewajarnya untuk platform terkait",
   "- Balas HANYA JSON valid sesuai schema, tanpa markdown fence, tanpa penjelasan",
 ].join("\n");
 

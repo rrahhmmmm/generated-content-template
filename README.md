@@ -1,6 +1,11 @@
 # Multi-Account Video Content Generator
 
-Satu klip video masuk → sepuluh video keluar, masing-masing sudah menempel overlay template milik tiap akun sosial media, plus caption & teks thumbnail yang sudah di-rewrite oleh LLM biar tidak identik antar akun.
+Satu klip video masuk → sepuluh video keluar, masing-masing sudah menempel overlay template milik tiap akun sosial media, plus caption & teks thumbnail yang **dibuat / ditulis ulang** oleh LLM per akun (mengikuti systemPrompt global + platform style + `Account.promptStyle`) biar tidak identik antar akun.
+
+User bisa pilih salah satu cara isi teks saat submit:
+
+1. **Description-only** — tulis deskripsi video komprehensif; LLM yang bikin caption + thumbnail text.
+2. **Caption + thumbnail manual** — tulis caption dan thumbnail text sendiri; LLM tetap menulis ulang per akun agar variatif.
 
 ---
 
@@ -13,7 +18,7 @@ Satu klip video masuk → sepuluh video keluar, masing-masing sudah menempel ove
 | Theme | **next-themes** | Dark/light mode toggle |
 | Form | **react-hook-form** + **zod** + **@hookform/resolvers** | Validasi typed, DX bagus |
 | Upload | **react-dropzone** | Drag-and-drop file |
-| Database | **Prisma 6** + **SQLite** (dev) / **PostgreSQL** (prod) | Relasi Job → Rendition jelas, mudah swap provider |
+| Database | **Prisma 6** + **PostgreSQL** (dev & prod, `datasource db { provider = "postgresql" }`) | Relasi Job → Rendition jelas; kolom teks bebas ukuran |
 | Queue | **BullMQ** + **ioredis** (prod) / in-memory queue (dev) | Render lepas dari request lifecycle, in-memory buat zero-config dev |
 | Worker | **Node.js standalone** (dijalankan via `tsx`) | FFmpeg butuh binary di filesystem + long-running |
 | Video render | **FFmpeg** (binary via `ffmpeg-static`) | Overlay statis = use case inti FFmpeg |
@@ -53,11 +58,13 @@ Konfigurasi prompt LLM global + per-platform style.
 - **Consumer**: `src/lib/llm/prompt.ts` compose system prompt + platform style + `Account.promptStyle` sebelum call LLM.
 
 ### 4. Create Job (`/create`)
-Upload video + isi caption & thumbnail text dasar → submit ke queue.
+Upload video + pilih mode input teks → submit ke queue.
 
-- **UI**: `src/app/create/create-form.tsx` — react-hook-form + zod + react-dropzone.
-- **Upload video**: `src/app/api/uploads/video/route.ts` streaming ke storage driver (local / R2).
-- **Submit**: POST `/api/jobs` (`src/app/api/jobs/route.ts`) — buat 1 `Job` + N `Rendition` (fan-out per akun aktif), enqueue via `src/lib/queue/`.
+- **UI**: `src/app/create/create-form.tsx` — toggle **Deskripsi (auto-generate) ↔ Manual (caption + thumbnail)**. Mode default = deskripsi.
+- **Mode "description"**: satu textarea "Deskripsi video (komprehensif)", min 20 karakter — LLM men-*generate* caption + thumbText per akun.
+- **Mode "manual"**: dua field caption + thumbnail text; counter kata untuk thumb (batas global 90 kata) — LLM me-*rewrite* per akun.
+- **Upload video**: `src/app/api/uploads/video/route.ts` streaming ke storage driver (local / R2). Upload auto-start di background saat file dipilih, supaya `sourceKey` siap saat submit.
+- **Submit**: POST `/api/jobs` (`src/app/api/jobs/route.ts`) — Zod `superRefine` memvalidasi XOR (harus salah satu, tidak boleh dua-duanya, tidak boleh kosong). Buat 1 `Job` + N `Rendition` fan-out per akun aktif (dalam satu `$transaction`), enqueue via `src/lib/queue/`.
 
 ### 5. Job Queue & Worker
 Fan-out render 10 rendition, resilient (1 rendition gagal ≠ job gagal total).
@@ -69,15 +76,24 @@ Fan-out render 10 rendition, resilient (1 rendition gagal ≠ job gagal total).
 - **Worker standalone**: `scripts/worker.ts` — proses long-lived, dijalankan `pnpm worker`. Panggil `src/lib/worker/process-job.ts` → fan-out ke `process-rendition.ts` per akun.
 - **Retry**: `src/app/api/renditions/[id]/retry/route.ts` untuk re-enqueue rendition yang gagal.
 
-### 6. LLM Rewrite (Caption + Thumbnail Text)
-Rewrite caption & thumbnail text agar unik per akun & sesuai platform style.
+### 6. LLM Generate / Rewrite (Caption + Thumbnail Text)
+Satu panggilan per Job (bukan per rendition) — hemat biaya + jamin variasi antar akun karena model melihat semua akun sekaligus.
 
+- **Dua mode** (`RewriteBatchInput` discriminated union di `src/lib/llm/index.ts`):
+  - `mode: "generate"` — dipicu kalau `Job.description` terisi. LLM membuat caption + thumbText dari deskripsi + systemPrompt + platform style + `Account.promptStyle`.
+  - `mode: "rewrite"` — dipicu kalau `Job.baseCaption` + `baseThumbText` terisi. LLM menulis ulang teks user per akun (perilaku lama, tetap didukung).
 - **Provider abstraction**: `src/lib/llm/index.ts` — factory berdasarkan `LLM_PROVIDER` env:
   - `gemini` → `src/lib/llm/gemini.ts` (`@ai-sdk/google`)
   - `anthropic-gateway` / `anthropic-direct` → `src/lib/llm/anthropic.ts` (`@ai-sdk/anthropic`)
-  - `null` → `src/lib/llm/null.ts` (echo, untuk test)
-- **Prompt compose**: `src/lib/llm/prompt.ts` gabung system prompt + platform style + `Account.promptStyle`.
-- **Structured output**: `generateObject` dari `ai` SDK + zod schema di `src/lib/llm/validation.ts` — hasil dijamin `{ caption, thumbText }`.
+  - `null` → `src/lib/llm/null.ts` (no-op, dipakai untuk test dan fallback otomatis kalau init provider gagal)
+- **Prompt compose**: `src/lib/llm/prompt.ts` gabung systemPrompt + platform style + `Account.promptStyle`. User message bercabang per mode (deskripsi vs caption asli).
+- **Structured output**: `generateObject` dari `ai` SDK + Zod schema. Semua provider menjamin output `{ results: [{ accountId, caption, thumbText }] }`.
+- **Validasi (`src/lib/llm/validation.ts`)** — `validateAndFallback` return per akun `{ ok: true, caption, thumbText, fellBack } | { ok: false, reason }`:
+  - `caption` non-empty, `thumbText` non-empty
+  - `countWords(thumbText) ≤ 90` — batas kata **global** (menggantikan `Template.maxThumbChars`). Over → truncate word-boundary.
+- **Fallback per mode** (`src/lib/worker/process-job.ts`):
+  - Mode generate → invalid → **rendition FAILED** (tidak ada teks user untuk fallback). Provider `null` di mode ini juga otomatis mem-FAIL semua rendition.
+  - Mode rewrite → invalid → fallback ke `baseCaption` / `baseThumbText` (dengan truncate 90 kata) supaya render tetap jalan.
 - **Boundary**: LLM hanya lihat teks; tidak pernah menerima frame video.
 
 ### 7. Video Rendering
@@ -104,7 +120,7 @@ Abstraksi supaya sama-sama jalan di dev (filesystem) & prod (R2).
   - `r2.ts` → Cloudflare R2 via `@aws-sdk/client-s3` + `@aws-sdk/s3-request-presigner` (S3-compatible).
 - **Switch**: `STORAGE_DRIVER=local|r2` di env.
 
-### 11. Auto-Generate Thumbnail per Account
+### 10. Auto-Generate Thumbnail per Account
 Ekstrak N frame unik dari 1 video sumber → thumbnail berbeda per akun, dengan dedup perseptual supaya video statis (talking head, slide) tetap menghasilkan thumbnail unik antar akun. Menghindari deteksi konten duplikat oleh platform.
 
 - **Distribusi timestamp**: `src/lib/thumbnails/distribute.ts` bagi merata (min interval 0.3s, clamp + warning kalau durasi < N × min).
@@ -125,7 +141,7 @@ Ekstrak N frame unik dari 1 video sumber → thumbnail berbeda per akun, dengan 
 
 Spawn budget per task (10 akun): 1 batch probe + 10 extract+hash + ≤5 dedup walk = **≤16 spawn**. Ditambah 1 encode pass per rendition untuk cover embed (opt-out via env).
 
-### 12. UI Component Library
+### 11. UI Component Library
 - `src/components/ui/` — komponen shadcn/ui (button, card, dialog, input, label, progress, select, skeleton, textarea, badge) di atas Radix.
 - `src/components/app-shell.tsx` — layout global.
 - `src/components/theme-provider.tsx` + `theme-toggle.tsx` — next-themes.
@@ -136,14 +152,27 @@ Spawn budget per task (10 akun): 1 batch probe + 10 extract+hash + ≤5 dedup wa
 
 ## Menjalankan Lokal
 
+Butuh Postgres running (default `.env.example` pakai `postgresql://postgres:dev@localhost:5435/gencontent`). Cara paling cepat:
+
+```bash
+docker run -d --name gencontent-pg \
+  -e POSTGRES_PASSWORD=dev -e POSTGRES_DB=gencontent \
+  -p 5435:5432 postgres:16
+```
+
+Setelah Postgres siap:
+
 ```bash
 pnpm install
 cp .env.example .env.local     # sesuaikan
-pnpm db:push                   # sync Prisma → SQLite dev.db
+pnpm db:push                   # sync Prisma schema → Postgres (dev-friendly, tidak generate file migration)
+pnpm db:seed                   # buat admin default (email/password lihat prisma/seed.ts)
 pnpm fonts:fetch               # download 16 curated Google Fonts → public/fonts/
 pnpm dev                       # Next.js di :3000
 pnpm worker                    # (di terminal terpisah, kalau JOB_QUEUE=bullmq)
 ```
+
+> Untuk perubahan schema di prod, pakai `pnpm db:migrate` (menghasilkan file migration di `prisma/migrations/`). `db:push` hanya untuk dev — data-loss disclaimer di-print oleh Prisma sesuai kebutuhan.
 
 > Font TTF di-commit ke repo, jadi `pnpm fonts:fetch` cukup dijalankan sekali saat fresh clone (atau setiap kali kamu menambah entry baru di `src/lib/font-catalog.ts` + `scripts/fetch-fonts.ts`).
 
@@ -157,21 +186,22 @@ Env penting (`.env.example`):
 
 ## Bootstrap Admin Pertama
 
-Setelah `pnpm db:push`, tabel `User` kosong. Buat admin pertama manual (tidak ada seed script otomatis by design):
+`pnpm db:seed` menjalankan `prisma/seed.ts` yang meng-upsert satu user ADMIN aktif. Kredensial default ada di file itu — **ganti sebelum production**:
 
-```bash
-# 1. Generate bcrypt hash untuk password admin (ganti PASSWORD_ANDA)
-node -e "console.log(require('bcryptjs').hashSync('PASSWORD_ANDA', 10))"
-# Output contoh: $2a$10$abc...
-
-# 2a. SQLite dev (default)
-sqlite3 prisma/dev.db "INSERT INTO User (id, email, passwordHash, name, role, status, createdAt, updatedAt) VALUES ('admin_seed_1', 'admin@example.com', '<PASTE_HASH>', 'Admin', 'ADMIN', 'ACTIVE', datetime('now'), datetime('now'));"
-
-# 2b. Postgres produksi
-psql $DATABASE_URL -c "INSERT INTO \"User\" (id, email, \"passwordHash\", name, role, status, \"createdAt\", \"updatedAt\") VALUES ('admin_seed_1', 'admin@example.com', '<PASTE_HASH>', 'Admin', 'ADMIN', 'ACTIVE', NOW(), NOW());"
+```
+email    : adminui@gmail.com
+password : MEDIAUIADMIN@123
 ```
 
-Login di `/login` dengan email + password tsb. User berikutnya bisa register via `/register` (default status `PENDING`) — admin approve di `/admin/users`.
+Login di `/login` dengan kredensial tsb. User berikutnya bisa register via `/register` (default status `PENDING`) — admin approve di `/admin/users`.
+
+Kalau kamu ingin admin email/password lain tanpa mengubah seed script, edit langsung baris konstanta di `prisma/seed.ts` atau insert manual via psql:
+
+```bash
+node -e "console.log(require('bcryptjs').hashSync('PASSWORD_ANDA', 10))"
+# copy hash ke query berikut
+psql $DATABASE_URL -c "INSERT INTO \"User\" (id, email, \"passwordHash\", name, role, status, \"createdAt\", \"updatedAt\") VALUES ('admin_seed_1', 'admin@example.com', '<PASTE_HASH>', 'Admin', 'ADMIN', 'ACTIVE', NOW(), NOW());"
+```
 
 ## Scripts
 
@@ -182,7 +212,7 @@ Login di `/login` dengan email + password tsb. User berikutnya bisa register via
 | `pnpm worker` | Jalankan worker BullMQ (long-lived) |
 | `pnpm submit-job` | Submit job dari CLI (debug) |
 | `pnpm render` | Render satu video ad-hoc (debug FFmpeg pipeline) |
-| `pnpm db:push` / `db:migrate` / `db:studio` | Prisma workflow |
+| `pnpm db:push` / `db:migrate` / `db:studio` / `db:seed` | Prisma workflow (push = dev sync, migrate = versioned prod, studio = GUI, seed = admin default) |
 | `pnpm fonts:fetch` | Download curated Google Fonts ke `public/fonts/` (idempoten, `--force` untuk overwrite) |
 | `pnpm cleanup-thumbnails` | Hapus file preview/uploaded thumbnail lokal yang mtime > 7 hari (jalankan via cron di prod-lite) |
 | `pnpm test` | Vitest |

@@ -1,4 +1,5 @@
 import type { RewriteBatchInput } from "./index";
+import { MAX_THUMB_WORDS } from "./index";
 import type { PromptConfig } from "@/lib/prompt-config";
 import { platformStyle } from "@/lib/prompt-config";
 
@@ -34,21 +35,36 @@ export function buildPrompt(
     for (const b of platformBlocks) systemParts.push(`- ${b}`);
   }
 
-  const userLines: string[] = [
-    `Caption asli: ${input.baseCaption}`,
-    `Thumbnail asli: ${input.baseThumbText}`,
-    "",
-    "Akun:",
-  ];
+  systemParts.push("");
+  systemParts.push(
+    `Aturan output global: thumbText WAJIB maksimum ${MAX_THUMB_WORDS} kata (word count, bukan karakter), tanpa emoji.`
+  );
+
+  const userLines: string[] = [];
+  if (input.mode === "generate") {
+    userLines.push(
+      "Tugas: BUAT caption + thumbText untuk setiap akun berdasarkan deskripsi video di bawah.",
+      "Gunakan systemPrompt + gaya platform + gaya per-akun sebagai panduan gaya bahasa.",
+      "",
+      "Deskripsi video:",
+      input.description,
+    );
+  } else {
+    userLines.push(
+      "Tugas: TULIS ULANG caption + thumbText per akun agar variatif tapi mempertahankan inti pesan.",
+      "",
+      `Caption asli: ${input.baseCaption}`,
+      `Thumbnail asli: ${input.baseThumbText}`,
+    );
+  }
+  userLines.push("", "Akun:");
   for (const a of input.accounts) {
     const style = accountStyles.get(a.accountId)?.trim();
-    // Sesuaikan gaya per platform juga di user prompt supaya LLM tidak lupa.
     const plStyle = platformStyle(config, a.platform).trim();
     const parts = [
       `accountId=${a.accountId}`,
       `handle=${a.handle}`,
       `platform=${a.platform}`,
-      `thumbnail max ${a.maxThumbChars} karakter`,
     ];
     if (style) parts.push(`gaya khusus: ${style}`);
     if (!style && plStyle) parts.push(`gaya platform: ${plStyle}`);
@@ -60,6 +76,9 @@ export function buildPrompt(
   );
   userLines.push(
     `Harus ada tepat ${input.accounts.length} elemen results, satu per accountId di atas.`
+  );
+  userLines.push(
+    `Ingat: thumbText ≤ ${MAX_THUMB_WORDS} kata.`
   );
 
   return { system: systemParts.join("\n"), user: userLines.join("\n") };

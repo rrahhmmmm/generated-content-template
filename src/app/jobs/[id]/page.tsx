@@ -30,6 +30,7 @@ export default async function JobDetailPage({
   const initial = {
     id: job.id,
     status: job.status,
+    description: job.description,
     baseCaption: job.baseCaption,
     baseThumbText: job.baseThumbText,
     createdAt: job.createdAt.toISOString(),

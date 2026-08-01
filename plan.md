@@ -9,10 +9,14 @@ Dokumen ini adalah spesifikasi untuk Claude Code. Dibaca dari atas ke bawah, tia
 Satu klip video masuk, sepuluh video keluar — masing-masing sudah memakai overlay template milik akun sosial media yang bersangkutan, dengan caption dan teks thumbnail yang sudah ditulis ulang agar tidak identik antar akun.
 
 ```
-Admin  ──upload frame PNG + intro PNG──►  Account (10x)
-User   ──upload clip + caption + thumbnail text──►  Job
+Admin  ──upload frame PNG + intro PNG──►  Account (10x, + promptStyle opsional)
+Admin  ──edit global systemPrompt + platform style──►  PromptConfig
+User   ──upload clip + PILIH SATU:                ──►  Job
+             (a) description komprehensif, ATAU
+             (b) baseCaption + baseThumbText manual
 Job    ──fan-out──►  10 Renditions
-                       ├─ LLM: rewrite caption & thumbnail text
+                       ├─ LLM: mode=generate → produce caption + thumbText dari description
+                       │        mode=rewrite  → tulis ulang base caption + thumb per akun
                        └─ FFmpeg: video + frame + intro card + drawtext
 User   ──download video + copy caption──►  selesai
 ```
@@ -60,7 +64,7 @@ Video mengisi seluruh kanvas — tidak diletakkan di dalam kotak. Overlay menimp
 | Database | PostgreSQL + Prisma | Relasi job→rendition jelas |
 | Storage | Cloudflare R2 (S3-compatible) | Egress gratis; video besar |
 | Render | FFmpeg (binary di worker) | Overlay statis = use case inti FFmpeg |
-| LLM | Anthropic API (`claude-sonnet-4-6`) | Rewrite caption, structured JSON output |
+| LLM | Vercel AI SDK v7 — provider swap via env (`gemini`, `anthropic-direct`, `anthropic-gateway`, `null`) | Rewrite/generate caption + thumbText dengan `generateObject` + Zod schema; provider fallback otomatis |
 
 ### Kenapa worker terpisah dari Next.js
 
@@ -70,72 +74,87 @@ Render 10 video butuh 40–90 detik. Serverless function timeout jauh sebelum it
 
 ## 3. Data model
 
+Skema definitif ada di `prisma/schema.prisma` (Postgres). Ringkasan model inti — enum status disimpan sebagai `String` (bukan Prisma enum) supaya migration lebih murah dan handler bisa broaden set nilai tanpa migrate.
+
 ```prisma
 model Account {
-  id            String   @id @default(cuid())
-  handle        String   @unique          // "@brand.jakarta"
-  platform      Platform                   // TIKTOK | INSTAGRAM | YOUTUBE
-  displayName   String
-  isActive      Boolean  @default(true)
-  template      Template?
-  renditions    Rendition[]
-  createdAt     DateTime @default(now())
+  id           String      @id @default(cuid())
+  handle       String      @unique
+  platform     String                     // "TIKTOK" | "INSTAGRAM" | "YOUTUBE"
+  displayName  String
+  isActive     Boolean     @default(true)
+  promptStyle  String?                    // per-akun override untuk LLM
+  template     Template?
+  renditions   Rendition[]
+  groups       Group[]     @relation("GroupAccounts")
+  createdAt    DateTime    @default(now())
 }
 
 model Template {
-  id            String   @id @default(cuid())
-  accountId     String   @unique
-  account       Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  frameKey      String                     // R2 key — PNG frame, seluruh durasi
-  introKey      String?                    // R2 key — PNG kartu intro, 0–5 detik
-  width         Int      @default(1080)
-  height        Int      @default(1920)
-  layout        Json                       // TemplateLayout, lihat §4
-  version       Int      @default(1)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id        String   @id @default(cuid())
+  accountId String   @unique
+  account   Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  frameKey  String                        // storage key frame full-duration PNG
+  introKey  String?                       // storage key intro card PNG (0-5 detik)
+  width     Int      @default(1080)
+  height    Int      @default(1920)
+  layout    String                        // TemplateLayout JSON-encoded (lihat §4)
+  version   Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model Job {
-  id            String    @id @default(cuid())
-  sourceKey     String                     // R2 key klip asli
+  id             String      @id @default(cuid())
+  sourceKey      String
   sourceDuration Float?
-  baseCaption   String    @db.Text
-  baseThumbText String
-  status        JobStatus @default(QUEUED)
-  renditions    Rendition[]
-  createdAt     DateTime  @default(now())
-  completedAt   DateTime?
+  // Dua mode input (XOR — di-enforce di API + worker):
+  //   (a) description — LLM generate caption + thumbText per akun
+  //   (b) baseCaption + baseThumbText — LLM rewrite per akun (perilaku klasik)
+  description    String?
+  baseCaption    String?
+  baseThumbText  String?
+  status         String      @default("QUEUED") // QUEUED | PROCESSING | COMPLETED | PARTIAL | FAILED
+  renditions     Rendition[]
+  createdAt      DateTime    @default(now())
+  completedAt    DateTime?
 }
 
 model Rendition {
-  id            String          @id @default(cuid())
-  jobId         String
-  job           Job             @relation(fields: [jobId], references: [id], onDelete: Cascade)
-  accountId     String
-  account       Account         @relation(fields: [accountId], references: [id])
-  status        RenditionStatus @default(PENDING)
-  caption       String?         @db.Text   // hasil rewrite LLM
-  thumbText     String?                    // hasil rewrite LLM
-  outputKey     String?                    // R2 key video jadi
-  thumbnailKey  String?                    // R2 key preview JPG
-  errorMessage  String?         @db.Text
-  attempts      Int             @default(0)
-  startedAt     DateTime?
-  finishedAt    DateTime?
+  id                    String    @id @default(cuid())
+  jobId                 String
+  job                   Job       @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  accountId             String
+  account               Account   @relation(fields: [accountId], references: [id])
+  status                String    @default("PENDING") // PENDING | WRITING | RENDERING | DONE | FAILED
+  caption               String?
+  thumbText             String?
+  outputKey             String?
+  thumbnailKey          String?
+  thumbnailSource       String?   // "AUTO" | "MANUAL" (null = fallback frame detik 2 dari output)
+  thumbnailTimestampSec Float?
+  errorMessage          String?
+  attempts              Int       @default(0)
+  startedAt             DateTime?
+  finishedAt            DateTime?
 
   @@unique([jobId, accountId])
   @@index([jobId, status])
 }
-
-enum Platform         { TIKTOK INSTAGRAM YOUTUBE }
-enum JobStatus        { QUEUED PROCESSING PARTIAL COMPLETED FAILED }
-enum RenditionStatus  { PENDING WRITING RENDERING DONE FAILED }
 ```
+
+Model penunjang (detail di `prisma/schema.prisma`):
+
+- `User` — auth iron-session; register default `PENDING`, admin approve di `/admin/users`.
+- `Group` — kumpulan Account untuk pemilihan cepat di `/create` (union ↔ akun manual di-resolve di server).
+- `PromptConfig` — singleton (`id="global"`) berisi `systemPrompt` + `tiktokStyle` + `instagramStyle` + `youtubeStyle`. Diedit di `/settings`.
+- `ThumbnailTask` — state async task auto-generate thumbnail per akun (lihat §12).
+
+Aturan yang tidak berubah:
 
 `@@unique([jobId, accountId])` penting: kalau worker retry, tidak akan tercipta rendition duplikat.
 
-`JobStatus.PARTIAL` dipakai kalau sebagian rendition selesai dan sebagian gagal — user tetap bisa download yang berhasil.
+`PARTIAL` (Job) dipakai kalau sebagian rendition selesai dan sebagian gagal — user tetap bisa download yang berhasil.
 
 ---
 
@@ -354,48 +373,80 @@ Set `rendition.errorMessage` sebagai peringatan (bukan status `FAILED`) dan tamp
 
 ---
 
-## 6. LLM rewrite
+## 6. LLM: dua mode dalam satu pipeline
 
-Satu panggilan per job, bukan per rendition — hemat 10x biaya dan menjamin variasi antar akun (model melihat semua sekaligus, jadi bisa membuat masing-masing berbeda).
+Satu panggilan per job, bukan per rendition — hemat 10× biaya dan menjamin variasi antar akun (model melihat semua sekaligus, jadi bisa membuat masing-masing berbeda).
 
-### Prompt
+### Dua mode input
+
+Ditentukan dari isi Job (XOR — divalidasi di API dan di worker sebagai safety):
+
+| Mode | Trigger | Perilaku LLM | Fallback kalau LLM invalid |
+|---|---|---|---|
+| **generate** | `Job.description` terisi | Membuat caption + thumbText per akun dari deskripsi | **Tidak ada fallback** → rendition FAILED |
+| **rewrite** | `Job.baseCaption` + `baseThumbText` terisi | Menulis ulang caption + thumbText per akun agar variatif | Fallback ke teks user (rendition tetap lanjut) |
+
+Perbedaan fallback disengaja: mode rewrite punya teks manusia yang siap dipakai; mode generate tidak — kalau LLM gagal, tidak ada "next best thing" untuk di-render.
+
+### Batas 90 kata untuk `thumbText`
+
+Batas per-platform `maxChars` dihapus. Sekarang **90 kata (word count, bukan karakter)** untuk semua platform, di-enforce di:
+
+- **Prompt** — instruksi eksplisit di system + user message.
+- **Validator** — `countWords(thumbText) > 90`:
+  - mode generate → truncate di batas kata (kalau LLM sedikit over) atau FAILED (kalau kombinasi caption/thumb tidak valid).
+  - mode rewrite → truncate; kalau fallback dipakai dan `baseThumbText` user > 90 kata, ikut ditruncate.
+
+### Prompt (garis besar — implementasi di `src/lib/llm/prompt.ts`)
 
 ```
 System:
-Kamu menulis ulang caption dan teks thumbnail untuk beberapa akun sosial media
-yang memposting konten sama. Inti pesan, fakta, angka, nama produk, dan call-to-action
-harus identik dengan versi asli. Yang berubah hanya susunan kalimat, pilihan kata,
-dan pembuka — supaya platform tidak mendeteksi konten duplikat.
+{PromptConfig.systemPrompt}     // default mencakup kedua mode + aturan 90 kata
 
-Aturan:
-- Jangan menambah klaim, angka, atau janji yang tidak ada di teks asli
-- Jangan menghapus informasi dari teks asli
-- Teks thumbnail maksimal {maxChars} karakter, tanpa emoji
-- Caption boleh pakai emoji dan hashtag kalau versi asli punya
-- Sesuaikan gaya dengan platform tiap akun
+Gaya per platform:
+- TIKTOK: {PromptConfig.tiktokStyle}     // skip kalau kosong
+- INSTAGRAM: {PromptConfig.instagramStyle}
+- YOUTUBE: {PromptConfig.youtubeStyle}
 
-Balas HANYA JSON, tanpa markdown fence:
-{"results":[{"accountId":"...","caption":"...","thumbText":"..."}]}
+Aturan output global: thumbText WAJIB maksimum 90 kata, tanpa emoji.
 
-User:
-Caption asli: {baseCaption}
-Thumbnail asli: {baseThumbText}
-
+User (mode=generate):
+Tugas: BUAT caption + thumbText untuk setiap akun berdasarkan deskripsi video di bawah.
+Deskripsi video: {Job.description}
 Akun:
-- {accountId} | {handle} | {platform} | thumbnail max {maxChars} karakter
-...
+- accountId={id} | handle={h} | platform={p} | gaya khusus: {Account.promptStyle}?
+
+User (mode=rewrite):
+Tugas: TULIS ULANG caption + thumbText per akun agar variatif tapi mempertahankan inti.
+Caption asli: {Job.baseCaption}
+Thumbnail asli: {Job.baseThumbText}
+Akun: (sama seperti generate)
+
+Balas JSON: {"results":[{"accountId":"...","caption":"...","thumbText":"..."}]}
 ```
+
+Layered prompt: `PromptConfig.systemPrompt` (global) → platform block (skip yang kosong) → per-akun `promptStyle` di user message. Semua editable di `/settings` dan `/accounts/[id]`.
+
+### Provider abstraction
+
+Interface `LLMProvider` (`src/lib/llm/index.ts`) — factory pilih dari `LLM_PROVIDER` env:
+
+- `anthropic-direct` — `@ai-sdk/anthropic` + `ANTHROPIC_API_KEY`
+- `anthropic-gateway` — Vercel AI Gateway (`AI_GATEWAY_API_KEY`, model string `anthropic/<model>`)
+- `gemini` — `@ai-sdk/google` + `GOOGLE_GENERATIVE_AI_API_KEY`
+- `null` — no-op, dipakai untuk test & sebagai fallback kalau init provider gagal
+
+**Guard tambahan di worker:** mode generate + provider `null` → semua rendition otomatis FAILED dengan pesan jelas. Mode rewrite + provider null tetap boleh (NullLLMProvider mengembalikan teks user apa adanya).
 
 ### Validasi wajib
 
-LLM output tidak boleh dipercaya mentah. Sebelum masuk render:
+LLM output tidak boleh dipercaya mentah. Per akun (`validateAndFallback` di `src/lib/llm/validation.ts`):
 
-- Parse JSON; kalau gagal, retry sekali dengan pesan error, lalu fallback ke teks asli
-- Cek tiap `accountId` ada dan tidak ada yang hilang
-- Cek `thumbText.length <= maxChars`; kalau lebih, truncate di batas kata
-- Cek `thumbText` tidak kosong
+- `accountId` cocok
+- `caption` non-empty
+- `thumbText` non-empty **dan** `countWords(thumbText) ≤ 90` (over → truncate word-boundary)
 
-Kalau validasi gagal untuk satu akun, pakai teks asli untuk akun itu dan lanjutkan. Job tidak boleh gagal gara-gara LLM.
+Return shape per akun: `{ ok: true, caption, thumbText, fellBack }` atau `{ ok: false, reason }`. Worker menerjemahkan `ok:false` → rendition FAILED (mode generate) atau fallback ke teks user (mode rewrite).
 
 ---
 
@@ -491,12 +542,16 @@ Bangun dengan `<canvas>`, bukan CSS absolute positioning — CSS akan menyimpang
 
 ### `/create` — buat konten
 
-Satu kolom, tiga langkah vertikal:
-1. Dropzone video (MP4/MOV, maks 200 MB) dengan preview player
-2. Textarea caption + input teks thumbnail, dengan counter karakter
-3. Daftar akun dengan checkbox — semua tercentang secara default; akun tanpa template ditampilkan disabled dengan alasan
+Satu kolom, empat langkah vertikal:
 
-Tombol "Buat 10 video" → POST `/api/jobs` → redirect ke `/jobs/[id]`.
+1. **Video sumber** — Dropzone video (MP4/MOV/WebM, maks 200 MB) dengan preview player. Upload jalan otomatis di background supaya `sourceKey` siap untuk generate thumbnail.
+2. **Teks konten** — toggle dua mode:
+   - **Deskripsi (auto-generate)** — satu textarea "Deskripsi video (komprehensif)", min 20 karakter. Sistem yang membuat caption + thumbnail text per akun.
+   - **Caption + thumbnail manual** — dua field seperti versi lama; counter kata untuk thumbnail (batas 90 kata). LLM tetap menulis ulang per akun.
+3. **Group + Akun** — pilih group (union anggota) dan/atau akun manual. Akun tanpa template disabled dengan alasan; akun via group ditampilkan dengan label "via <group>".
+4. **Thumbnail per akun (opsional)** — panel `ThumbnailPreview` untuk generate / upload thumbnail unik per akun. Non-blocking: submit selalu boleh, worker fallback ke frame detik 2 kalau kosong.
+
+Tombol "Buat N video" → POST `/api/jobs` (body memuat `description` **atau** `baseCaption` + `baseThumbText`, tidak boleh dua-duanya) → redirect ke `/jobs/[id]`.
 
 ### `/jobs/[id]` — hasil
 
@@ -516,19 +571,46 @@ Tabel job: thumbnail, caption terpotong, jumlah selesai/total, waktu, link ke de
 
 ## 9. API
 
+Semua endpoint di bawah butuh session cookie kecuali `/api/healthz` dan endpoint `/api/auth/*`.
+
 | Method | Path | Fungsi |
 |---|---|---|
-| `GET` | `/api/accounts` | Daftar akun + status template |
-| `POST` | `/api/accounts` | Buat akun |
-| `PATCH` | `/api/accounts/[id]` | Ubah / nonaktifkan |
+| `POST` | `/api/auth/login` · `/register` · `/logout` | iron-session auth (register default status `PENDING`) |
+| `PATCH` | `/api/admin/users/[id]` | Approve / reject user (ADMIN only) |
+| `GET` · `POST` | `/api/accounts` | Daftar akun + status template · buat akun |
+| `PATCH` | `/api/accounts/[id]` | Ubah handle, displayName, status, `promptStyle` |
 | `PUT` | `/api/accounts/[id]/template` | Simpan overlay + layout |
-| `POST` | `/api/uploads/presign` | URL presigned R2 untuk upload langsung |
-| `POST` | `/api/jobs` | Buat job + rendition + enqueue |
-| `GET` | `/api/jobs/[id]` | Status job + semua rendition |
-| `GET` | `/api/jobs/[id]/download` | Stream ZIP semua rendition `DONE` |
+| `GET` · `POST` | `/api/groups` · `/[id]` | CRUD Group |
+| `GET` · `PUT` | `/api/prompt-config` | Baca/ubah systemPrompt + platform style global |
+| `POST` | `/api/uploads/video` | Upload video sumber (streaming ke storage driver) |
+| `POST` | `/api/uploads` | Upload asset frame/intro PNG |
+| `POST` · `GET` | `/api/thumbnails/generate` · `/[taskId]` | Async task auto-generate thumbnail per akun |
+| `POST` | `/api/thumbnails/upload` | Upload thumbnail manual (override) |
+| `POST` | `/api/jobs` | **Buat Job**: XOR `description` ATAU `baseCaption` + `baseThumbText` |
+| `GET` | `/api/jobs/list` · `/[id]` | Riwayat job (50 terbaru) · detail per rendition |
+| `GET` | `/api/jobs/[id]/download` | Stream ZIP semua rendition `DONE` + `captions.txt` |
 | `POST` | `/api/renditions/[id]/retry` | Requeue satu rendition |
+| `GET` | `/api/healthz` | Liveness (tanpa auth) |
 
-**Upload lewat presigned URL, bukan lewat server.** File 200 MB tidak boleh melewati Next.js — client upload langsung ke R2, lalu kirim key-nya ke `/api/jobs`.
+### Contract `POST /api/jobs`
+
+Body validation (Zod `.superRefine`):
+
+```jsonc
+// mode generate
+{ "sourceKey": "…", "description": "…(min 20 char)…", "accountIds": [...], "groupIds": [...] }
+
+// mode rewrite
+{ "sourceKey": "…", "baseCaption": "…", "baseThumbText": "…", "accountIds": [...], "groupIds": [...] }
+```
+
+- Wajib **salah satu** — `description` saja, atau `baseCaption` + `baseThumbText` berpasangan.
+- Payload dengan kombinasi lain → 400 dengan pesan spesifik.
+- Response 201 → `{ id, status, renditionCount, finalAccountIds, excluded, missingGroups }`.
+
+### Prinsip upload
+
+Local dev pakai driver `local` dengan proxy route besar (`proxyClientMaxBodySize=250mb`). Prod pakai R2 — untuk file besar (>50MB) sebaiknya lewat presigned URL agar tidak melewati Next.js function. Presigning belum di-ekspos sebagai endpoint terpisah; upload streaming saat ini sudah cukup untuk 200 MB via `POST /api/uploads/video`.
 
 ---
 
@@ -588,6 +670,12 @@ Rate limit per user. Dead-letter queue untuk rendition yang gagal 3x. Cleanup fi
 **Video vertikal vs horizontal.** Klip user mungkin 16:9 sementara template 9:16. `scale` + `crop` di §5 menanganinya, tapi hasilnya memotong sisi. Tampilkan peringatan di `/create` kalau rasio sumber berbeda jauh dari template.
 
 **Biaya LLM naik kalau per-rendition.** Satu panggilan per job, bukan sepuluh. Sudah dirancang begitu di §6 — jangan diubah saat refactor.
+
+**Mode generate vs rewrite adalah XOR, bukan merge.** Jangan biarkan `Job.description` dan `Job.baseCaption` sama-sama non-null "just in case". API validator sengaja menolak kombinasi itu. Kalau ada kode migrasi yang mengisi kedua-duanya, worker akan mem-FAIL-kan Job karena input tidak konsisten.
+
+**Fallback mode generate ≠ mode rewrite.** Mode generate tidak punya teks manusia untuk di-render — kalau LLM gagal, rendition FAILED (bukan fallback ke `description` mentah). Mode rewrite tetap fallback ke `baseCaption`/`baseThumbText` (dengan truncate 90 kata). Menyeragamkan behavior akan menutupi masalah konfigurasi LLM dan menghasilkan konten pull-quote deskripsi mentah di feed.
+
+**Cap thumbText adalah 90 kata (word count), bukan karakter.** `Template.maxThumbChars` masih ada di DB tapi tidak lagi dibaca oleh prompt/validator. Kalau ada PR menambah cek karakter lagi, itu regresi ke perilaku lama.
 
 ---
 

@@ -10,21 +10,43 @@ export type RewriteAccountInput = {
   accountId: string;
   handle: string;
   platform: Platform;
-  maxThumbChars: number;
 };
 
-export type RewriteBatchInput = {
-  baseCaption: string;
-  baseThumbText: string;
-  accounts: RewriteAccountInput[];
-};
+// Batas thumbnail global (menggantikan maxThumbChars per platform). LLM diminta
+// menahan thumbText ≤ MAX_THUMB_WORDS; validator men-enforce di server.
+export const MAX_THUMB_WORDS = 90;
 
-export type RewriteBatchItem = {
-  accountId: string;
-  caption: string;
-  thumbText: string;
-  fellBack: boolean;
-};
+// Dua mode input LLM:
+// - "generate": user hanya kasih description → LLM produce caption + thumbText.
+// - "rewrite":  user kasih baseCaption + baseThumbText → LLM tulis ulang per akun (perilaku lama).
+export type RewriteBatchInput =
+  | {
+      mode: "generate";
+      description: string;
+      accounts: RewriteAccountInput[];
+    }
+  | {
+      mode: "rewrite";
+      baseCaption: string;
+      baseThumbText: string;
+      accounts: RewriteAccountInput[];
+    };
+
+// Per-akun hasil setelah validasi. Mode "rewrite" bisa fallback ke teks user
+// (fellBack: true); mode "generate" tidak — invalid → { ok: false, reason }.
+export type RewriteBatchItem =
+  | {
+      ok: true;
+      accountId: string;
+      caption: string;
+      thumbText: string;
+      fellBack: boolean;
+    }
+  | {
+      ok: false;
+      accountId: string;
+      reason: string;
+    };
 
 export type RewriteBatchOutput = {
   items: RewriteBatchItem[];

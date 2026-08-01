@@ -87,8 +87,12 @@ model Job {
   id             String      @id @default(cuid())
   sourceKey      String
   sourceDuration Float?
-  baseCaption    String
-  baseThumbText  String
+  // Dua mode input: (a) description saja → LLM generate caption+thumbText per akun,
+  // atau (b) baseCaption + baseThumbText → LLM rewrite per akun (perilaku lama).
+  // API memvalidasi XOR: hanya satu mode yang boleh diisi per Job.
+  description    String?
+  baseCaption    String?
+  baseThumbText  String?
   status         String      @default("QUEUED")
   renditions     Rendition[]
   createdAt      DateTime    @default(now())
