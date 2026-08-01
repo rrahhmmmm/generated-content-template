@@ -63,12 +63,11 @@ export function CreateForm({
   const [sourceDuration, setSourceDuration] = useState<number | null>(null);
   const [thumbnails, setThumbnails] = useState<Map<string, ThumbnailEntry>>(new Map());
 
-  // Default: semua akun aktif+template tercentang. Yang tanpa template disabled.
-  const [selected, setSelected] = useState<Set<string>>(() => {
-    const s = new Set<string>();
-    for (const a of accounts) if (a.isActive && a.hasTemplate) s.add(a.id);
-    return s;
-  });
+  // Default: tidak ada akun ter-centang. User wajib pilih secara eksplisit
+  // supaya tidak ada job yang tidak sengaja dikirim ke akun yang tidak
+  // diinginkan (mis. akun testing, cabang lain). Akun tanpa template tetap
+  // disabled dan tidak bisa dipilih.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [selectedGroups, setSelectedGroups] = useState<Set<string>>(new Set());
 
   const [submitResult, setSubmitResult] = useState<{
@@ -467,7 +466,7 @@ export function CreateForm({
           <CardDescription>
             {resolvedAccountIds.size} akun akan menerima video (
             {selected.size} manual + {resolvedAccountIds.size - selected.size} via group).
-            Akun tanpa template tidak bisa diproses.
+            Pilih akun secara manual atau lewat group. Akun tanpa template tidak bisa diproses.
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-2">
@@ -599,11 +598,13 @@ export function CreateForm({
           <span className="text-caption text-text-muted">
             {!file
               ? "Upload video dulu, lalu isi deskripsi (atau caption + thumbnail manual)."
-              : missingThumbCount > 0 && thumbnails.size > 0
-                ? `Siap dikirim. ${missingThumbCount} akun akan pakai thumbnail default (frame detik 2 dari video hasil).`
-                : missingThumbCount > 0
-                  ? `Siap dikirim. Semua akun akan pakai thumbnail default (frame detik 2). Klik "Generate Thumbnails" untuk thumbnail unik per akun.`
-                  : "Siap dikirim."}
+              : resolvedAccountIds.size === 0
+                ? "Pilih minimal satu akun (atau group) di bagian bawah untuk melanjutkan."
+                : missingThumbCount > 0 && thumbnails.size > 0
+                  ? `Siap dikirim. ${missingThumbCount} akun akan pakai thumbnail default (frame detik 2 dari video hasil).`
+                  : missingThumbCount > 0
+                    ? `Siap dikirim. Semua akun akan pakai thumbnail default (frame detik 2). Klik "Generate Thumbnails" untuk thumbnail unik per akun.`
+                    : "Siap dikirim."}
           </span>
         )}
       </div>
