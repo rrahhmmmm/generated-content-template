@@ -112,7 +112,19 @@ export async function render(inp: RenderInput): Promise<RenderResult> {
   };
 }
 
-function runFfmpeg(args: string[]): Promise<void> {
+async function runFfmpeg(args: string[]): Promise<void> {
+  // Observability: baseline pids saat spawn — untuk menjawab pertanyaan
+  // elevator (kegagalan historis terjadi sequential, sumber elevasi
+  // baseline belum teridentifikasi). Lihat docs/error-ffmpeg.md §6.
+  let pidsAtSpawn = -1;
+  try {
+    const raw = await fs.readFile("/sys/fs/cgroup/pids.current", "utf8");
+    pidsAtSpawn = parseInt(raw.trim(), 10);
+  } catch {
+    // non-cgroup env (dev macOS) — abaikan
+  }
+  console.log(`[render] spawning ffmpeg, pids.current=${pidsAtSpawn}`);
+
   return new Promise((resolve, reject) => {
     const proc = spawn(FFMPEG_BIN, args, { stdio: ["ignore", "pipe", "pipe"] });
     let stderr = "";
