@@ -21,6 +21,8 @@ export async function extractFrameWithHash(
   return new Promise((resolve, reject) => {
     const args = [
       "-y",
+      "-threads",
+      "2",
       "-ss",
       String(atSec),
       "-i",

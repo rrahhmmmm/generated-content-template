@@ -57,7 +57,19 @@ export async function render(inp: RenderInput): Promise<RenderResult> {
     font,
   });
 
-  const args: string[] = ["-y", "-i", inp.sourcePath, "-i", inp.framePath];
+  const args: string[] = [
+    "-y",
+    "-threads",
+    "4",
+    "-filter_threads",
+    "2",
+    "-filter_complex_threads",
+    "1",
+    "-i",
+    inp.sourcePath,
+    "-i",
+    inp.framePath,
+  ];
   if (inp.layout.intro) {
     if (!inp.introPath) throw new Error("layout.intro !== null tapi introPath null");
     args.push("-i", inp.introPath);
@@ -73,6 +85,8 @@ export async function render(inp: RenderInput): Promise<RenderResult> {
     "libx264",
     "-preset",
     "veryfast",
+    "-threads",
+    "4",
     "-crf",
     "20",
     "-pix_fmt",
