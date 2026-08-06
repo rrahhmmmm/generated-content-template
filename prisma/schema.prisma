@@ -97,6 +97,8 @@ model Job {
   renditions     Rendition[]
   createdAt      DateTime    @default(now())
   completedAt    DateTime?
+
+  @@index([createdAt(sort: Desc)])
 }
 
 model Rendition {
@@ -119,6 +121,7 @@ model Rendition {
 
   @@unique([jobId, accountId])
   @@index([jobId, status])
+  @@index([accountId, jobId])
 }
 
 // Pre-job async task untuk generate N thumbnail unik dari 1 video source.

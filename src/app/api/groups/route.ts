@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
+import { revalidateTag } from "next/cache";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { assertUser } from "@/lib/auth/session";
+import { GROUPS_CACHE_TAG } from "@/lib/groups";
 
 const createSchema = z.object({
   name: z.string().trim().min(1).max(80),
@@ -65,6 +67,7 @@ export async function POST(req: Request) {
       },
       include: { accounts: { select: { id: true } } },
     });
+    revalidateTag(GROUPS_CACHE_TAG, { expire: 0 });
     return NextResponse.json(
       {
         id: group.id,

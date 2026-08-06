@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
+import { revalidateTag } from "next/cache";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { assertUser } from "@/lib/auth/session";
+import { GROUPS_CACHE_TAG } from "@/lib/groups";
 
 const patchSchema = z.object({
   name: z.string().trim().min(1).max(80).optional(),
@@ -64,6 +66,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
       data,
       include: { accounts: { select: { id: true } } },
     });
+    revalidateTag(GROUPS_CACHE_TAG, { expire: 0 });
     return NextResponse.json({
       id: updated.id,
       name: updated.name,
@@ -86,5 +89,6 @@ export async function DELETE(_req: Request, ctx: { params: Promise<{ id: string 
   if (gate) return gate;
   const { id } = await ctx.params;
   await prisma.group.delete({ where: { id } }).catch(() => null);
+  revalidateTag(GROUPS_CACHE_TAG, { expire: 0 });
   return NextResponse.json({ ok: true });
 }
